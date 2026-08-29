@@ -22,8 +22,8 @@ export const CONFIG = {
   STABILITY_START: 60,         // stability value when the game begins
 
   // How much stability changes per game-loop tick, based on breath state.
-  STABILITY_GAIN_CALM: 0.6,        // calm breathing slowly raises stability
-  STABILITY_GAIN_MODERATE: 0.1,    // moderate breathing raises it very slightly
+  STABILITY_GAIN_CALM: 1.5,        // calm breathing raises stability (was 0.6 — increased for faster progress)
+  STABILITY_GAIN_MODERATE: 0.4,    // moderate breathing raises it a bit (was 0.1 — increased for faster progress)
   STABILITY_LOSS_PANICKED: 1.0,    // panicked breathing lowers it noticeably
   STABILITY_LOSS_ERRATIC: 0.6,     // erratic (irregular) breathing lowers it moderately
   STABILITY_DECAY_IDLE: 0.15,      // NO genuine breathing detected this tick - gently DRAINS
@@ -42,8 +42,13 @@ export const CONFIG = {
 
   // Game loop timing 
   TICK_INTERVAL_MS: 500,     // how often (ms) the game re-evaluates stability/power
-  NO_INPUT_TIMEOUT_MS: 4000, // if no new breath detected in this long, count the tick as "idle"
-                              // (see STABILITY_DECAY_IDLE - idle NEVER grants gain)
+  // If no new breath ACTIVITY detected in this long, count the tick as
+  // "idle" (see STABILITY_DECAY_IDLE - idle NEVER grants gain). This
+  // MUST stay comfortably above CALM_CYCLE_MS (5000ms) - otherwise
+  // breathing calmly (which by definition has 5+ second gaps between
+  // breaths) would itself keep tripping the idle timeout and draining
+  // stability between every single calm breath.
+  NO_INPUT_TIMEOUT_MS: 6500,
 
   //  Microphone input settings 
   MIC_FFT_SIZE: 1024,           // size of the audio analysis buffer (must be a power of 2)
@@ -52,9 +57,11 @@ export const CONFIG = {
   MIN_BREATH_PHASE_MS: 180,     // a loud moment only counts as a real inhale/exhale once it has
                                  // stayed above the threshold for this long - filters out short
                                  // clicks, pops, taps, and stray noise that aren't actual mouth-breathing
-  MIC_FALLBACK_TIMEOUT_MS: 20000,// if the mic never picks up a single genuine breath phase for this
-                                 // long (game start, or after breathing stops being detected),
-                                 // automatically switch to keyboard (press B) input
+  // NOTE: there used to be a MIC_FALLBACK_TIMEOUT_MS here that switched
+  // from mic to keyboard input after a period of silence. That's no
+  // longer needed - both input methods now run simultaneously from the
+  // start (see gamebootstrap.js), so switching is immediate and doesn't
+  // depend on any timeout at all.
 
   //  Alarm settings (plays when the world becomes chaotic)
   ALARM_FREQUENCY_HZ: 880,   // pitch of the alarm tone

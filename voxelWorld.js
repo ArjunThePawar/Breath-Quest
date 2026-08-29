@@ -1,16 +1,9 @@
-// voxelWorld.js
-//
+
 // A small circular island surrounded by animated water, with a gradient
 // skybox that shifts color with world mood, plus added surface detail
 // (trees, rocks, grass tufts, drifting clouds) so the island reads as
 // a real place rather than bare colored terrain.
-//
-// Public API is unchanged:
-//   const world = initVoxelWorld(canvas);
-//   world.setMood(zone, stabilityValue);
-//   world.setBrightness(0-100);
-//   world.setOrbiting(true/false);
-//   world.dispose();
+
 
 import * as THREE from "three";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";

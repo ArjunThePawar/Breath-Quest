@@ -244,6 +244,7 @@ export function initApp() {
   const inputBanner = document.getElementById("inputBanner");
   const winBanner = document.getElementById("winBanner");
   const winBannerText = document.getElementById("winBannerText");
+  const failBanner = document.getElementById("failBanner");
   const inputModeEl = document.getElementById("inputModeValue");
 
   let zoneBannerTimeout = null;
@@ -284,8 +285,13 @@ export function initApp() {
       winBannerText.textContent = `Held maximum power for ${(heldDurationMs / 1000).toFixed(1)}s`;
       winBanner.classList.add("show");
     },
+    showFail() {
+      failBanner.classList.add("show");
+    },
     setInputMode(mode) {
-      inputModeEl.textContent = mode === "mic" ? "Microphone" : "Keyboard (press B)";
+      if (mode === "mic") inputModeEl.textContent = "Microphone";
+      else if (mode === "keyboard") inputModeEl.textContent = "Keyboard (press B)";
+      else inputModeEl.textContent = "Mic or Keyboard";
     },
   };
 
@@ -295,6 +301,7 @@ export function initApp() {
     world.setOrbiting(false);
     player.enable();
     winBanner.classList.remove("show");
+    failBanner.classList.remove("show");
     borderWarningEl.classList.remove("show");
     inputBanner.classList.remove("show");
     waterOverlayEl.style.opacity = 0;
@@ -318,6 +325,10 @@ export function initApp() {
     refreshMainMenu();
     showScreen("main");
   }
+
+  document.getElementById("tryAgainBtn").addEventListener("click", () => {
+    failBanner.classList.remove("show");
+  });
 
   document.getElementById("escToMenuBtn").addEventListener("click", () => {
     // Note: this does not stop the running GameEngine (no exposed handle

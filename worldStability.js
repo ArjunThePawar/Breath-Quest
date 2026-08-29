@@ -1,4 +1,4 @@
-// worldStability.js
+
 // Manages the single most important stat in the game: WORLD STABILITY
 // (a number from 0 to 100). Calm breathing raises it, panicked/erratic breathing lowers it.
 // It also tracks which "zone" the world is currently in - stable,

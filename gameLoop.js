@@ -6,27 +6,62 @@
 //
 // It also owns the WIN CONDITION logic, since winning depends on
 // combining information from multiple systems (power + time).
+//
+// MULTIPLE SIMULTANEOUS INPUTS: the engine accepts one OR SEVERAL breath
+// input sources at once (e.g. keyboard AND mic running together). Both
+// stay live the whole session - there's no "try mic, fall back to
+// keyboard after a timeout" step. Whichever source most recently
+// produced a real breath becomes the "active" one driving the world, so
+// if mic detection isn't working for someone, they can just start
+// pressing B and the game switches over immediately - no waiting, no
+// separate fallback mechanism to reason about.
 
 import { CONFIG } from "./config.js";
 import { BreathAnalyzer } from "./breathAnalyzer.js";
 import { WorldStability } from "./worldStability.js";
 import { PlayerState } from "./playerState.js";
 import { AlarmSystem } from "./alarmsystem.js";
-import { KeyboardBreathInput } from "./breathInput.js";
 
 export class GameEngine extends EventTarget {
-  // breathInputSource: either a KeyboardBreathInput or MicBreathInput instance.
-  constructor(breathInputSource) {
+  // inputSources: a single BreathInputSource instance, OR an array of
+  // several (e.g. [keyboardInput, micInput]) that should all run at once.
+  constructor(inputSources) {
     super();
 
+    // Normalize to an array so the rest of the class only ever deals
+    // with "the list of active input sources", regardless of how many
+    // were passed in.
+    this._inputs = Array.isArray(inputSources) ? inputSources : [inputSources];
+
     // Store references to each subsystem.
-    this._input = breathInputSource;
-    this._analyzer = new BreathAnalyzer();
     this._stability = new WorldStability();
     this._player = new PlayerState();
     this._alarm = new AlarmSystem();
 
-    // Tracks the most recent breathing classification (defaults to neutral).
+    // Each input source gets its OWN analyzer and classification. This
+    // matters because the sources aren't interchangeable data - mixing
+    // mic-detected cycle durations and keyboard-tap durations into one
+    // shared rolling average would make the classification erratic any
+    // time someone alternates between the two. Instead we keep them
+    // fully separate, and simply read from whichever source is
+    // currently "active" (see _activeInput below).
+    this._perInputState = new Map();
+    for (const input of this._inputs) {
+      this._perInputState.set(input, {
+        analyzer: new BreathAnalyzer(),
+        classification: { state: "moderate", avgCycleMs: null, variance: 0 },
+      });
+    }
+
+    // Whichever input source most recently produced a genuine breath
+    // phase. This is what "drives" the world at any given moment - it
+    // updates instantly the moment a DIFFERENT source produces activity,
+    // which is what lets a player seamlessly switch from breathing to
+    // pressing B (or back) mid-session.
+    this._activeInput = null;
+
+    // Tracks the most recent breathing classification from whichever
+    // input is active (defaults to neutral before any input arrives).
     this._latestClassification = { state: "moderate", avgCycleMs: null, variance: 0 };
 
     // The state actually applied to stability THIS tick - usually mirrors
@@ -37,17 +72,16 @@ export class GameEngine extends EventTarget {
     // player went quiet.
     this._effectiveState = "moderate";
 
-    // Tracks when the last real breath was detected, so we can tell if
-    // the player has stopped giving input entirely.
+    // Tracks when the last genuine breath ACTIVITY (any single phase -
+    // one inhale, one exhale, or one keyboard tap) was detected, FROM
+    // ANY input source, so we can tell if the player has stopped giving
+    // input entirely. Updated on every "breathphase" event, not just on
+    // completed full cycles - a full mic breath cycle only completes
+    // once every ~2 phases, so gating idle-detection on cycle-completion
+    // alone would leave real, ongoing breathing misclassified as "idle"
+    // between cycles.
     this._lastBreathTimestamp = null;
-
-    // Tracks when the last genuine breath PHASE (single inhale or exhale
-    // sound) was detected, regardless of whether it completed a full
-    // cycle yet. Used only to decide whether the mic is picking up real
-    // mouth-breathing at all, for the mic -> keyboard fallback below.
-    this._lastBreathPhaseTimestamp = null;
     this._engineStartTimestamp = null;
-    this._fallbackTriggered = false; // only ever swap mic -> keyboard once per session
 
     // Handle for the setInterval loop, so we can stop it later.
     this._tickHandle = null;
@@ -56,23 +90,17 @@ export class GameEngine extends EventTarget {
     this._powerFullSince = null; // timestamp when power FIRST reached max (resets if power drops)
     this._hasWon = false;        // becomes true once, and stays true (prevents re-firing "win")
 
-    // Whenever the input source detects a completed breath cycle,
-    // update our classification immediately (not just on the tick timer),
-    // so the analyzer always has the latest data available.
-    this._onBreathCycle = (e) => {
-      this._latestClassification = this._analyzer.addCycle(e.detail.cycleDurationMs);
-      this._lastBreathTimestamp = performance.now();
-    };
-    // Whenever the input source detects ANY genuine breath phase (even
-    // the very first one, before a full cycle can be measured), note
-    // that real breathing is happening - this is what keeps the mic ->
-    // keyboard fallback from triggering while the player IS breathing
-    // correctly into the mic.
-    this._onBreathPhase = () => {
-      this._lastBreathPhaseTimestamp = performance.now();
-    };
-    this._input.addEventListener("breathcycle", this._onBreathCycle);
-    this._input.addEventListener("breathphase", this._onBreathPhase);
+    // ── Fail condition tracking ──
+    // Becomes true once, and stays true (prevents re-firing "fail" every
+    // single tick the world sits in the chaotic zone).
+    this._hasFailed = false;
+
+    // Wire up every input source identically - each one can independently
+    // report breath phases/cycles at any time, for the whole session.
+    for (const input of this._inputs) {
+      input.addEventListener("breathphase", () => this._onBreathPhase(input));
+      input.addEventListener("breathcycle", (e) => this._onBreathCycle(input, e));
+    }
 
     // Whenever the world's ZONE changes (e.g. unstable -> chaotic),
     // react accordingly: forward the event outward for the UI, AND
@@ -81,9 +109,19 @@ export class GameEngine extends EventTarget {
       // Let any UI code listening to the GameEngine know the zone changed.
       this.dispatchEvent(new CustomEvent("worldzonechange", { detail: e.detail }));
 
-      // Turn the alarm ON the moment the world becomes chaotic.
+      // Turn the alarm ON the moment the world becomes chaotic, and
+      // report a failure the first time this happens (guarded by
+      // _hasFailed, mirroring how "win" only ever fires once). This does
+      // NOT stop the engine - chaotic is still recoverable (the alarm
+      // turns back off in the "from chaotic" branch below if the player
+      // calms back down), so the UI can choose to show a "failed - try
+      // again" message without forcing the run to end.
       if (e.detail.to === "chaotic") {
         this._alarm.start();
+        if (!this._hasFailed) {
+          this._hasFailed = true;
+          this.dispatchEvent(new CustomEvent("fail", { detail: { reason: "world-collapsed" } }));
+        }
       }
       // Turn the alarm OFF the moment the world LEAVES chaotic
       // (i.e. it was chaotic before, and now it's something else).
@@ -93,34 +131,85 @@ export class GameEngine extends EventTarget {
     });
   }
 
-  // Starts the whole engine: activates the input source (mic/keyboard)
-  // and begins the repeating tick loop.
+  // Called whenever ANY input source detects a genuine breath phase
+  // (one inhale, one exhale, or one keyboard tap). Updates the shared
+  // "is the player active at all" timestamp, and - if a DIFFERENT
+  // source than before just produced activity - switches which source
+  // is "active" and tells the UI about it.
+  _onBreathPhase(input) {
+    this._lastBreathTimestamp = performance.now();
+
+    if (this._activeInput !== input) {
+      const previous = this._activeInput;
+      this._activeInput = input;
+
+      // Immediately reflect that source's last-known classification,
+      // rather than waiting for its next completed cycle - avoids a
+      // brief stale reading from whichever source was active before.
+      this._latestClassification = this._perInputState.get(input).classification;
+
+      this.dispatchEvent(
+        new CustomEvent("activeinputchange", {
+          detail: { from: previous ? previous.name : null, to: input.name },
+        })
+      );
+    }
+  }
+
+  // Called whenever ANY input source completes a full breath cycle.
+  // Feeds that source's OWN analyzer (never a shared one - see the
+  // comment in the constructor), and only updates the engine's overall
+  // classification if this cycle came from the currently active source.
+  _onBreathCycle(input, e) {
+    const state = this._perInputState.get(input);
+    state.classification = state.analyzer.addCycle(e.detail.cycleDurationMs);
+
+    if (input === this._activeInput) {
+      this._latestClassification = state.classification;
+    }
+  }
+
+  // Starts the whole engine: activates EVERY input source at once, and
+  // begins the repeating tick loop. If one source fails to start (e.g.
+  // the player denies microphone permission), that's caught individually
+  // so it doesn't stop the others from starting - the game stays fully
+  // playable on whichever source(s) actually work.
   async start() {
     this._engineStartTimestamp = performance.now();
-    if (this._input.start) {
-      await this._input.start(); // "await" matters for mic (asks permission first)
-    }
+
+    await Promise.all(
+      this._inputs.map(async (input) => {
+        if (!input.start) return;
+        try {
+          await input.start(); // "await" matters for mic (asks permission first)
+        } catch (err) {
+          console.warn(`Breath input "${input.name}" failed to start (that's fine - other input methods are still active):`, err);
+        }
+      })
+    );
+
     this._tickHandle = setInterval(() => this._tick(), CONFIG.TICK_INTERVAL_MS);
   }
 
   // Stops everything cleanly (used when ending a game session).
   stop() {
     if (this._tickHandle) clearInterval(this._tickHandle);
-    if (this._input.stop) this._input.stop();
+    for (const input of this._inputs) {
+      if (input.stop) input.stop();
+    }
     this._alarm.stop(); // make sure the alarm never keeps blaring after stop()
   }
 
   // Runs automatically every TICK_INTERVAL_MS. This is where stability,
   // power, and the win condition all get recalculated.
   _tick() {
-    const now = performance.now();
-
     // Figure out how long it's been since the player last produced a
-    // detected breath. If it's been too long, treat this tick as IDLE -
-    // not "moderate". Silence must never be mistaken for calm/moderate
-    // breathing, or the game becomes winnable by doing nothing at all.
+    // detected breath, from ANY input source. If it's been too long,
+    // treat this tick as IDLE - not "moderate". Silence must never be
+    // mistaken for calm/moderate breathing, or the game becomes
+    // winnable by doing nothing at all.
     const timeSinceLastBreath = this._lastBreathTimestamp
-      ? now - this._lastBreathTimestamp
+      ? performance.now() - this._lastBreathTimestamp
       : Infinity;
 
     const effectiveState =
@@ -140,52 +229,8 @@ export class GameEngine extends EventTarget {
     // Check whether the player has now met the win condition.
     this._checkWinCondition(power);
 
-    // If we're on mic input and it has never once picked up a genuine,
-    // sustained breath phase (or stopped picking one up) for too long,
-    // assume the mic isn't getting real mouth-breathing and fall back
-    // to keyboard input automatically so the game stays playable.
-    if (this._input.usesMic && !this._fallbackTriggered) {
-      const sinceLastPhase = this._lastBreathPhaseTimestamp
-        ? now - this._lastBreathPhaseTimestamp
-        : now - this._engineStartTimestamp;
-
-      if (sinceLastPhase > CONFIG.MIC_FALLBACK_TIMEOUT_MS) {
-        this._fallbackTriggered = true;
-        this._switchToKeyboardFallback();
-      }
-    }
-
     // Broadcast the full updated state, so any UI listening can redraw itself.
     this.dispatchEvent(new CustomEvent("tick", { detail: this.getState() }));
-  }
-
-  // Swaps the active input source from mic to keyboard mid-session. Only
-  // ever runs once (guarded by _fallbackTriggered in _tick). Cleans up
-  // the old input, wires the same listeners onto a fresh
-  // KeyboardBreathInput, resets breath history so the switch doesn't
-  // inherit a stale mic reading, and announces the change so the UI can
-  // tell the player what happened and how to keep playing.
-  async _switchToKeyboardFallback() {
-    const oldInput = this._input;
-    oldInput.removeEventListener("breathcycle", this._onBreathCycle);
-    oldInput.removeEventListener("breathphase", this._onBreathPhase);
-    if (oldInput.stop) oldInput.stop();
-
-    const keyboardInput = new KeyboardBreathInput(window);
-    keyboardInput.addEventListener("breathcycle", this._onBreathCycle);
-    keyboardInput.addEventListener("breathphase", this._onBreathPhase);
-    this._input = keyboardInput;
-    if (this._input.start) await this._input.start();
-
-    this._analyzer.reset();
-    this._latestClassification = { state: "moderate", avgCycleMs: null, variance: 0 };
-    this._effectiveState = "moderate";
-    this._lastBreathTimestamp = null;
-    this._lastBreathPhaseTimestamp = null;
-
-    this.dispatchEvent(
-      new CustomEvent("inputfallback", { detail: { reason: "no-mouth-breathing-detected" } })
-    );
   }
 
   // Determines whether the player has won: power must reach WIN_POWER_THRESHOLD
@@ -238,6 +283,10 @@ export class GameEngine extends EventTarget {
       },
       power: this._player.power,               // 10-100
       hasWon: this._hasWon,                    // true once the win condition is met
+      hasFailed: this._hasFailed,              // true once the world has collapsed into chaos at least once
+      // Which input source is currently driving the world ("mic",
+      // "keyboard", or null before any breath has been detected yet).
+      activeInput: this._activeInput ? this._activeInput.name : null,
       // How long (ms) power has been continuously at max right now.
       // Useful for a UI progress bar toward winning.
       winProgressMs: this._powerFullSince

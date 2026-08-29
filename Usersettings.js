@@ -1,5 +1,4 @@
-// userSettings.js  (NEW FILE — does not modify config.js, breathInput.js, etc.)
-//
+//  does not modify config.js, breathInput.js, etc.
 // Owns all player-adjustable settings: volume, brightness, sensitivity,
 // music on/off, and key bindings. Settings are persisted to
 // localStorage and, where relevant, applied to the existing CONFIG

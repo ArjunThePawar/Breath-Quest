@@ -14,40 +14,60 @@ import { CONFIG } from "./config.js";
 // tracking the timestamp of the last detected breath, and calculating
 // how long the gap was since the one before it.
 export class BreathInputSource extends EventTarget {
-  constructor() {
+  // phasesPerCycle = how many detected "phases" make up ONE full breath
+  // cycle for this input method.
+  //   - Keyboard: each key tap IS a full breath by design -> 1.
+  //   - Microphone: a real breath produces TWO loud phases (the inhale
+  //     sound, then the exhale sound) -> 2. Without this distinction,
+  //     mic input was measuring inhale-to-exhale (roughly HALF a real
+  //     breath) and calling that a "cycle", which made completely calm
+  //     breathing look twice as fast as it really was and get
+  //     classified as moderate/panicked instead of calm - draining
+  //     stability even while breathing correctly.
+  constructor(phasesPerCycle = 1) {
     super(); // required when extending EventTarget
-    this._lastPeakTimestamp = null; // timestamp of the previous detected breath
+    this._phasesPerCycle = Math.max(1, phasesPerCycle);
+    this._phaseTimestamps = []; // rolling history of the most recent phase timestamps
   }
 
-  // Call this method whenever a breath is detected, with the current time.
+  // Call this method whenever a breath PHASE is detected, with the current time.
   _registerBreathPeak(timestamp = performance.now()) {
     // Always announce a single breath PHASE (one inhale or one exhale
     // sound) - this fires even for the very first one detected, before
-    // there's a previous timestamp to measure a full cycle against.
+    // there's enough history to measure a full cycle against.
     // GameEngine listens for this to confirm real breathing is actually
     // happening at all (used to decide whether to fall back from mic to
     // keyboard input), separately from "breathcycle" below which only
-    // fires once there are two phases to measure a duration between.
+    // fires once there are enough phases to measure a full-breath
+    // duration between.
     this.dispatchEvent(
       new CustomEvent("breathphase", { detail: { timestamp } })
     );
 
-    // If we've already seen a previous breath, we can calculate the
-    // duration of the cycle between that one and this one.
-    if (this._lastPeakTimestamp !== null) {
-      const cycleDurationMs = timestamp - this._lastPeakTimestamp;
+    // Keep a short rolling history of phase timestamps - just enough to
+    // look back phasesPerCycle steps.
+    this._phaseTimestamps.push(timestamp);
+    if (this._phaseTimestamps.length > this._phasesPerCycle + 1) {
+      this._phaseTimestamps.shift();
+    }
+
+    // Once we have enough history to span one full cycle (phasesPerCycle
+    // phases back from now), fire a "breathcycle" event using that
+    // FULL-BREATH duration, not just the gap since the immediately
+    // previous phase.
+    if (this._phaseTimestamps.length > this._phasesPerCycle) {
+      const startTimestamp =
+        this._phaseTimestamps[this._phaseTimestamps.length - 1 - this._phasesPerCycle];
+      const cycleDurationMs = timestamp - startTimestamp;
 
       // Fire a custom event so anything listening (like GameEngine)
-      // finds out a breath cycle just completed.
+      // finds out a full breath cycle just completed.
       this.dispatchEvent(
         new CustomEvent("breathcycle", {
           detail: { cycleDurationMs, timestamp },
         })
       );
     }
-
-    // Remember this timestamp so the NEXT breath can measure against it.
-    this._lastPeakTimestamp = timestamp;
   }
 }
 
@@ -59,11 +79,12 @@ export class BreathInputSource extends EventTarget {
 // and faster, more frequent taps for panicked breathing.
 export class KeyboardBreathInput extends BreathInputSource {
   constructor(targetElement = window) {
-    super();
+    super(1); // one key tap = one full simulated breath
+    this.name = "keyboard";           // lets GameEngine report which input is driving the game
     this._targetElement = targetElement;         // where we listen for key events
     this._onKeyDown = this._onKeyDown.bind(this); // bind so "this" works inside the handler
     this._isKeyDown = false;                      // prevents key-repeat from counting multiple times
-    this.usesMic = false;                         // lets GameEngine tell input sources apart
+    this.usesMic = false;                         // general-purpose flag identifying this source type
   }
 
   // Begin listening for B-key presses.
@@ -102,13 +123,14 @@ export class KeyboardBreathInput extends BreathInputSource {
 // the surrounding ambient noise (an inhale/exhale sound).
 export class MicBreathInput extends BreathInputSource {
   constructor() {
-    super();
+    super(2); // a real breath = inhale phase + exhale phase
+    this.name = "mic";                 // lets GameEngine report which input is driving the game
     this._audioContext = null;         // the Web Audio context (created on start)
     this._analyser = null;             // node that gives us live audio data
     this._dataArray = null;            // buffer that holds the raw waveform data
     this._rafId = null;                // requestAnimationFrame handle, so we can cancel the loop later
     this._lastRegisteredTime = 0;      // timestamp of the last counted breath (for debouncing)
-    this.usesMic = true;               // lets GameEngine tell input sources apart
+    this.usesMic = true;               // general-purpose flag identifying this source type
 
     // We track a "noise floor" - the ambient background loudness - so the
     // detector adapts to different rooms/microphones instead of using
@@ -179,7 +201,18 @@ export class MicBreathInput extends BreathInputSource {
 
     // Slowly adjust our estimate of the "ambient" noise level, so quiet
     // rooms and loud rooms both work without manual reconfiguration.
-    this._noiseFloor = this._noiseFloor * 0.98 + amplitude * 0.02;
+    //
+    // IMPORTANT: this must only happen while the sound is QUIET (at/below
+    // the last known threshold). If we let it adapt on every frame
+    // regardless of loudness, a sustained breath sound (exactly what
+    // we're trying to detect) drags the "noise floor" up to meet the
+    // breath itself. The threshold then chases the very sound it's
+    // supposed to catch, and after a moment the breath stops clearing
+    // it - real, ongoing breathing silently stops registering.
+    const previousThreshold = this._noiseFloor + CONFIG.MIC_PEAK_THRESHOLD;
+    if (amplitude <= previousThreshold) {
+      this._noiseFloor = this._noiseFloor * 0.98 + amplitude * 0.02;
+    }
 
     const dynamicThreshold = this._noiseFloor + CONFIG.MIC_PEAK_THRESHOLD;
     const isAboveThreshold = amplitude > dynamicThreshold;

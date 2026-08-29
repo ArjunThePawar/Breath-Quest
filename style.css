@@ -200,6 +200,19 @@ html, body{
 .win-banner.show{ opacity: 1; visibility: visible; pointer-events: all; }
 .win-banner h2{ font-family: 'Press Start 2P', monospace; color: var(--accent); font-size: 18px; }
 
+.fail-banner{
+  position: absolute; top: 40%; left: 50%; transform: translate(-50%,-50%);
+  background: var(--panel-bg);
+  border: 1px solid var(--danger);
+  padding: 30px 50px; border-radius: 10px;
+  text-align: center;
+  opacity: 0; visibility: hidden;
+  transition: opacity 0.4s ease, visibility 0.4s ease;
+}
+.fail-banner.show{ opacity: 1; visibility: visible; pointer-events: all; }
+.fail-banner h2{ font-family: 'Press Start 2P', monospace; color: var(--danger); font-size: 18px; }
+.fail-banner p{ color: var(--ink); max-width: 360px; }
+
 .esc-hint{
   position: absolute; bottom: 20px; right: 20px;
   color: var(--muted); font-size: 11px;

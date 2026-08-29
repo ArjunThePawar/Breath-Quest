@@ -1,35 +1,29 @@
-// gameBootstrap.js  (NEW FILE)
+// gameBootstrap.js
 //
 // Starts your existing GameEngine (from gameLoop.js) once the player
 // presses Play from the menu, and connects its events to the HUD and
 // the voxel world's mood lighting. This does NOT reuse main.js (which
 // auto-runs on load) — it imports the same underlying classes directly,
 // so main.js is left completely untouched and unused by this flow.
+//
+// BOTH breath input methods (microphone AND keyboard) are created and
+// started together, and stay active for the whole session. There's no
+// "try mic, fall back to keyboard" step - if mic detection doesn't work
+// for someone (denied permission, no mic, unreliable detection), they
+// can just press B at any point and the game switches over immediately,
+// with no waiting period. Whichever one is currently driving the world
+// is reported via the engine's "activeinputchange" event.
 
 import { KeyboardBreathInput, MicBreathInput } from "./breathInput.js";
 import { GameEngine } from "./gameLoop.js";
 import { updateSaveStats } from "./savesystem.js";
 
-// Starts the game. Tries the microphone first (the intended experience);
-// if the user denies permission or has no mic, falls back to keyboard
-// (press B) input so the game is still playable.
+// Starts the game with both input methods live simultaneously.
 export async function startGame({ world, hud, onWin }) {
-  let input;
-  let usingMic = true;
-  try {
-    input = new MicBreathInput();
-    // MicBreathInput.start() requests mic permission lazily inside
-    // engine.start(), so we do a quick permission probe here first.
-    await navigator.mediaDevices.getUserMedia({ audio: true }).then((s) =>
-      s.getTracks().forEach((t) => t.stop())
-    );
-  } catch (err) {
-    console.warn("Microphone unavailable, falling back to keyboard input (press B).", err);
-    input = new KeyboardBreathInput(window);
-    usingMic = false;
-  }
+  const keyboardInput = new KeyboardBreathInput(window);
+  const micInput = new MicBreathInput();
 
-  const engine = new GameEngine(input);
+  const engine = new GameEngine([keyboardInput, micInput]);
 
   engine.addEventListener("tick", (e) => {
     const { breath, stability, power, hasWon, winProgressMs } = e.detail;
@@ -48,23 +42,32 @@ export async function startGame({ world, hud, onWin }) {
     if (onWin) onWin(e.detail);
   });
 
-  // The engine itself may swap from mic to keyboard mid-session if it
-  // never picks up genuine mouth-breathing (see GameEngine._tick /
-  // _switchToKeyboardFallback in gameLoop.js). Reflect that in the HUD
-  // so the player knows what changed and how to keep playing.
-  engine.addEventListener("inputfallback", () => {
-    hud.setInputMode("keyboard");
+  // Fires the first time the world collapses into the chaotic zone
+  // (the same moment the alarm starts). Chaotic is still recoverable -
+  // the engine keeps running - so this just surfaces a "failed, try
+  // again" message telling the player what happened without ending
+  // their session for them.
+  engine.addEventListener("fail", () => {
+    hud.showFail();
+  });
+
+  // Fires the instant a DIFFERENT input source than before produces a
+  // real breath - i.e. the player just switched from breathing to
+  // pressing B, or vice versa. Update the HUD label to match, and give
+  // a brief, non-alarming confirmation toast (not persistent - this is
+  // normal usage, not an error condition).
+  engine.addEventListener("activeinputchange", (e) => {
+    hud.setInputMode(e.detail.to);
     hud.flashInputMessage(
-      "No steady mouth-breathing detected — switched to keyboard input. Press B every few seconds to breathe (faster taps = panicked).",
-      { persist: true }
+      e.detail.to === "mic"
+        ? "Now using microphone input."
+        : "Now using keyboard input (press B)."
     );
   });
 
-  hud.setInputMode(usingMic ? "mic" : "keyboard");
+  hud.setInputMode(null);
   hud.flashInputMessage(
-    usingMic
-      ? "Breathe calmly through your mouth into the mic — silence won't stabilize the world."
-      : "Microphone unavailable — press B roughly every 4 seconds to breathe."
+    "Breathe calmly through your mouth into the mic, or press B every few seconds - whichever you use will drive the world."
   );
 
   await engine.start();

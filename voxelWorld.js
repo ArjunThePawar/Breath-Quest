@@ -19,7 +19,12 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 const ISLAND_RADIUS = 26;
-export const ACCESS_RADIUS = 15;
+// Pushed out to nearly the island's true edge (ISLAND_RADIUS = 15) —
+// this is as large as it can go while still leaving a small margin so
+// the border-warning zone means "you've left the island", not "you've
+// left an arbitrary inner circle". Almost the entire island, including
+// the whole beach, is now freely explorable before any warning.
+export const ACCESS_RADIUS = ISLAND_RADIUS - 1;
 const GRID_SIZE = ISLAND_RADIUS * 2 + 2;
 export const CENTER = GRID_SIZE / 2;
 const WATER_LEVEL = 0;
@@ -41,6 +46,31 @@ function heightAt(x, z) {
   return h;
 }
 
+// Returns how deep underwater a given (x,z) point is, in world units.
+// 0 = dry land. heightAt() collapses to exactly 0 outside ISLAND_RADIUS
+// (that's how the land falloff works), so it can't be used alone to
+// detect real ocean depth — it would report the entire sea as "0 depth,
+// dry land". Instead: inside the island, use heightAt() directly (this
+// still catches any interior low spots/ponds). Beyond the island's
+// edge, model an actual seafloor that gets deeper the further out you
+// go, so stepping off the beach immediately registers as real water.
+function waterDepthAt(x, z) {
+  const dx = x - CENTER, dz = z - CENTER;
+  const dist = Math.sqrt(dx * dx + dz * dz);
+
+  if (dist <= ISLAND_RADIUS) {
+    const rawH = heightAt(x, z);
+    return rawH < WATER_LEVEL ? WATER_LEVEL - rawH : 0;
+  }
+
+  // Past the coastline: depth increases with distance from shore,
+  // starting immediately (0.3 minimum) so there's no "dead zone" right
+  // at the water's edge, capped at 6 so the tint/physics don't need to
+  // handle unbounded depth.
+  const distPastShore = dist - ISLAND_RADIUS;
+  return Math.min(6, 0.3 + distPastShore * 0.4);
+}
+
 function smoothstep(edge0, edge1, x) {
   const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
   return t * t * (3 - 2 * t);
@@ -48,9 +78,21 @@ function smoothstep(edge0, edge1, x) {
 
 function blockColor(height, distFromCenter) {
   if (height > 6.5) return new THREE.Color(0x7c7f86);
-  if (distFromCenter > ISLAND_RADIUS * 0.82) return new THREE.Color(0xd8c58a);
-  if (height > 4) return new THREE.Color(0x4f7a41);
-  return new THREE.Color(0x5b8a4a);
+
+  // Beach band widened significantly (was 0.82, now starts at 0.6) so
+  // sand reads as a real coastline feature instead of a thin fringe.
+  // Two-tone sand: lighter "wet sand" right at the waterline, deeper
+  // dry sand further inland, for a more natural beach gradient.
+  const beachStart = ISLAND_RADIUS * 0.6;
+  if (distFromCenter > beachStart) {
+    const wetness = smoothstep(beachStart, ISLAND_RADIUS, distFromCenter);
+    const drySand = new THREE.Color(0xe0c98a);
+    const wetSand = new THREE.Color(0xf0e2b8);
+    return drySand.clone().lerp(wetSand, wetness);
+  }
+
+  if (height > 4) return new THREE.Color(0x4f7a41);          // deep grass
+  return new THREE.Color(0x5b8a4a);                          // grass
 }
 
 // Simple deterministic hash so decoration placement is stable across
@@ -136,13 +178,18 @@ const waterFragment = `
 
 export function initVoxelWorld(canvas) {
   const scene = new THREE.Scene();
-  scene.fog = new THREE.FogExp2(0x0e1a12, 0.028);
+  // Fog density and camera far-plane together define how far the player
+  // can see. Both were tuned tightly around the old ~54-unit visibility
+  // radius; halving the densities (and pushing the far plane out to
+  // match) roughly doubles the view distance while keeping the same
+  // soft-fade-into-fog look rather than a hard pop-in edge.
+  scene.fog = new THREE.FogExp2(0x0e1a12, 0.014);
 
   const camera = new THREE.PerspectiveCamera(
     55,
     canvas.clientWidth / canvas.clientHeight || 1,
     0.1,
-    550
+    900
   );
   camera.position.set(CENTER + ACCESS_RADIUS * 0.9, 11, CENTER + ACCESS_RADIUS * 0.9);
   camera.lookAt(CENTER, 2, CENTER);
@@ -192,12 +239,12 @@ export function initVoxelWorld(canvas) {
   const mood = {
     current: {
       sunColor: new THREE.Color(0xfff1c9), sunIntensity: 1.5,
-      fogColor: new THREE.Color(0x0e1a12), fogDensity: 0.028, bloom: 1.1,
+      fogColor: new THREE.Color(0x0e1a12), fogDensity: 0.014, bloom: 1.1,
       skyTop: new THREE.Color(0x2f6fb0), skyHorizon: new THREE.Color(0xdfeeff), skyBottom: new THREE.Color(0x3a4a3a),
     },
     target: {
       sunColor: new THREE.Color(0xfff1c9), sunIntensity: 1.5,
-      fogColor: new THREE.Color(0x0e1a12), fogDensity: 0.028, bloom: 1.1,
+      fogColor: new THREE.Color(0x0e1a12), fogDensity: 0.014, bloom: 1.1,
       skyTop: new THREE.Color(0x2f6fb0), skyHorizon: new THREE.Color(0xdfeeff), skyBottom: new THREE.Color(0x3a4a3a),
     },
     flicker: false,
@@ -263,6 +310,94 @@ export function initVoxelWorld(canvas) {
   water.position.y = WATER_LEVEL;
   scene.add(water);
 
+  // ---- splash particles ----
+  // A small pool of reusable droplet sprites. Whenever the player steps
+  // from dry land into water (see spawnSplash, called from
+  // playerMovement.js), a burst of these pop up from the surface and
+  // arc outward/upward under simple gravity before fading out. Pooled
+  // instead of created-on-demand so repeated splashes never allocate
+  // new geometry/materials mid-game.
+  const SPLASH_POOL_SIZE = 120;
+  const splashTex = makeGlowTexture();
+  const splashPool = [];
+  const activeSplashes = [];
+
+  for (let i = 0; i < SPLASH_POOL_SIZE; i++) {
+    const mat = new THREE.SpriteMaterial({
+      map: splashTex,
+      color: 0xdff6ff,
+      transparent: true,
+      depthWrite: false,
+      opacity: 0,
+    });
+    const sprite = new THREE.Sprite(mat);
+    sprite.visible = false;
+    sprite.scale.setScalar(0.01);
+    sprite.userData.velocity = new THREE.Vector3();
+    sprite.userData.life = 0;
+    sprite.userData.maxLife = 1;
+    scene.add(sprite);
+    splashPool.push(sprite);
+  }
+
+  // Spawns a burst of droplets at world-space (x, z), right at the
+  // water surface. Safe to call repeatedly - if the pool runs dry
+  // (many rapid splashes at once) it simply spawns fewer droplets
+  // rather than allocating more.
+  function spawnSplash(x, z) {
+    const count = 14 + Math.floor(Math.random() * 6);
+    for (let i = 0; i < count; i++) {
+      const sprite = splashPool.pop();
+      if (!sprite) break;
+
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 1.2 + Math.random() * 2.2;
+      sprite.userData.velocity.set(
+        Math.cos(angle) * speed,
+        2.4 + Math.random() * 2.6,
+        Math.sin(angle) * speed
+      );
+      sprite.userData.life = 0;
+      sprite.userData.maxLife = 0.45 + Math.random() * 0.35;
+
+      sprite.position.set(
+        x + (Math.random() - 0.5) * 0.5,
+        WATER_LEVEL + 0.05,
+        z + (Math.random() - 0.5) * 0.5
+      );
+      sprite.scale.setScalar(0.15 + Math.random() * 0.2);
+      sprite.material.opacity = 0.9;
+      sprite.visible = true;
+      activeSplashes.push(sprite);
+    }
+  }
+
+  // Advances every currently-animating splash droplet by dt: simple
+  // gravity arc, fade-out over its lifetime, then returns it to the
+  // pool once it expires.
+  function updateSplashes(dt) {
+    for (let i = activeSplashes.length - 1; i >= 0; i--) {
+      const sprite = activeSplashes[i];
+      sprite.userData.life += dt;
+      const t = sprite.userData.life / sprite.userData.maxLife;
+
+      if (t >= 1) {
+        sprite.visible = false;
+        sprite.material.opacity = 0;
+        activeSplashes.splice(i, 1);
+        splashPool.push(sprite);
+        continue;
+      }
+
+      sprite.userData.velocity.y -= 9 * dt; // gravity pulls droplets back down
+      sprite.position.addScaledVector(sprite.userData.velocity, dt);
+      if (sprite.position.y < WATER_LEVEL) sprite.position.y = WATER_LEVEL; // don't sink below the surface
+
+      sprite.material.opacity = 0.9 * (1 - t);
+      sprite.scale.setScalar(0.15 + 0.2 * (1 - t));
+    }
+  }
+
   // ---- voxel island terrain (instanced) ----
   const blockGeo = new THREE.BoxGeometry(1, 1, 1);
   const blockMat = new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0.05 });
@@ -322,7 +457,10 @@ export function initVoxelWorld(canvas) {
     const [x, z] = keyStr.split(",").map(Number);
     const { h, dist } = info;
 
-    const isGrass = h <= 4 && h >= 1 && dist < ISLAND_RADIUS * 0.82;
+      // Matches the new wider beach band above — trees/rocks/grass tufts
+    // now stay clear of the whole sandy coastline, not just its old
+    // thin edge.
+    const isGrass = h <= 4 && h >= 1 && dist < ISLAND_RADIUS * 0.6;
     if (!isGrass) return;
 
     const r = hash2(x, z);
@@ -412,7 +550,7 @@ export function initVoxelWorld(canvas) {
       mood.target.sunColor.set(0xfff1c9);
       mood.target.sunIntensity = 1.6;
       mood.target.fogColor.set(0x1a2a1c);
-      mood.target.fogDensity = 0.02;
+      mood.target.fogDensity = 0.01;
       mood.target.bloom = 1.2;
       mood.target.skyTop.set(0x2f6fb0);
       mood.target.skyHorizon.set(0xdfeeff);
@@ -422,7 +560,7 @@ export function initVoxelWorld(canvas) {
       mood.target.sunColor.set(0xd8c9a8);
       mood.target.sunIntensity = 1.05;
       mood.target.fogColor.set(0x141a14);
-      mood.target.fogDensity = 0.035;
+      mood.target.fogDensity = 0.0175;
       mood.target.bloom = 0.85;
       mood.target.skyTop.set(0x4a5560);
       mood.target.skyHorizon.set(0x9aa3ad);
@@ -432,7 +570,7 @@ export function initVoxelWorld(canvas) {
       mood.target.sunColor.set(0xff6a4a);
       mood.target.sunIntensity = 0.7;
       mood.target.fogColor.set(0x1a0b0b);
-      mood.target.fogDensity = 0.055;
+      mood.target.fogDensity = 0.0275;
       mood.target.bloom = 1.4;
       mood.target.skyTop.set(0x220a0a);
       mood.target.skyHorizon.set(0x8a3018);
@@ -484,6 +622,8 @@ export function initVoxelWorld(canvas) {
     waterUniforms.uCameraPos.value.copy(camera.position);
     waterUniforms.uShallowColor.value.set(mood.flicker ? 0x8a3a3a : 0x6fd8d8);
 
+    updateSplashes(dt);
+
     cloudGroup.children.forEach((c) => {
       c.position.x += c.userData.speed * dt;
       if (c.position.x > CENTER + 100) c.position.x = CENTER - 100;
@@ -512,6 +652,8 @@ export function initVoxelWorld(canvas) {
   return {
     camera,
     getGroundHeight,
+    getWaterDepth: (x, z) => waterDepthAt(x, z),
+    spawnSplash,
     CENTER,
     setMood,
     setBrightness,
@@ -528,6 +670,9 @@ export function initVoxelWorld(canvas) {
       canopyMats.forEach((m) => m.dispose());
       rockGeo.dispose();
       tuftGeo.dispose();
+      splashTex.dispose();
+      splashPool.forEach((s) => s.material.dispose());
+      activeSplashes.forEach((s) => s.material.dispose());
       renderer.dispose();
     },
   };

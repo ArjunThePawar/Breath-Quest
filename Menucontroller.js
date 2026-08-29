@@ -4,10 +4,11 @@
 // the settings sub-menu (volume / brightness / sensitivity / controls),
 // and the in-game HUD — including the border-warning countdown shown
 // when the player wanders past the island's accessible-area radius,
-// and an always-visible background music toggle. Talks to
-// userSettings.js, saveSystem.js, voxelWorld.js, musicSystem.js, and
-// gameBootstrap.js — never touches the original game files directly
-// except by importing their already-exported classes.
+// a water tint overlay that intensifies with swimming depth, and an
+// always-visible background music toggle. Talks to userSettings.js,
+// saveSystem.js, voxelWorld.js, musicSystem.js, and gameBootstrap.js —
+// never touches the original game files directly except by importing
+// their already-exported classes.
 
 import { initVoxelWorld } from "./voxelWorld.js";
 import { initPlayerMovement } from "./Playermovement.js";
@@ -32,9 +33,10 @@ export function initApp() {
   world.setBrightness(settings.brightness);
 
   // ---- HUD elements needed before initPlayerMovement, since the
-  // border-warning callback references borderWarningEl directly ----
+  // border-warning and water-overlay callbacks reference them directly ----
   const hudEl = document.getElementById("hud");
   const borderWarningEl = document.getElementById("borderWarning");
+  const waterOverlayEl = document.getElementById("waterOverlay");
 
   // ================= BACKGROUND MUSIC =================
   // Fully original, generated live via Web Audio oscillators (see
@@ -71,16 +73,24 @@ export function initApp() {
   // Movement is purely visual (walks the camera around the island) —
   // it does not touch breath/stability/power at all. settings.controls
   // is passed by reference, so remapping keys in the settings menu
-  // takes effect immediately without re-creating this. The player can
-  // now walk past ACCESS_RADIUS freely; onBorderWarning fires with the
-  // seconds remaining (or null when safe/inside) so the HUD can show
-  // a "go back inside" countdown instead of a hard wall.
+  // takes effect immediately without re-creating this.
+  //
+  // The player can walk past ACCESS_RADIUS freely; onBorderWarning
+  // fires with the seconds remaining (or null when safe/inside) so the
+  // HUD can show a "go back inside" countdown instead of a hard wall.
+  //
+  // getWaterDepth lets the movement code detect swimming vs. walking;
+  // onWaterStateChange reports the current depth each frame (0 on dry
+  // land) so the HUD can fade in a blue tint proportional to how deep
+  // the player currently is.
   const player = initPlayerMovement({
     canvas,
     camera: world.camera,
     getGroundHeight: world.getGroundHeight,
+    getWaterDepth: world.getWaterDepth,
     center: world.CENTER,
     controls: settings.controls,
+    spawnSplash: world.spawnSplash,
     onBorderWarning(secondsLeft) {
       if (secondsLeft === null) {
         borderWarningEl.classList.remove("show");
@@ -88,6 +98,12 @@ export function initApp() {
       }
       borderWarningEl.textContent = `Go back inside the border! ${secondsLeft.toFixed(1)}s`;
       borderWarningEl.classList.add("show");
+    },
+    onWaterStateChange(depth) {
+      // depth is 0 on dry land; opacity scales with how deep the water
+      // is, capped so the overlay never becomes fully opaque/blinding.
+      const intensity = Math.min(1, depth / 3);
+      waterOverlayEl.style.opacity = intensity;
     },
   });
 
@@ -264,6 +280,7 @@ export function initApp() {
     player.enable();
     winBanner.classList.remove("show");
     borderWarningEl.classList.remove("show");
+    waterOverlayEl.style.opacity = 0;
     try {
       await startGame({ world, hud });
     } catch (err) {
@@ -279,14 +296,13 @@ export function initApp() {
     world.setOrbiting(true);
     world.setMood("stable");
     borderWarningEl.classList.remove("show");
+    waterOverlayEl.style.opacity = 0;
     refreshMainMenu();
     showScreen("main");
   }
 
   document.getElementById("escToMenuBtn").addEventListener("click", () => {
-    // Note: this does not stop the running GameEngine (no exposed handle
-    // here) — for a full "pause/quit" flow, have gameBootstrap.startGame
-    // return the engine instance and call engine.stop() before this.
+    
     returnToMenu();
   });
 }

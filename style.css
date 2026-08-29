@@ -219,3 +219,10 @@ html, body{
 }
 .music-toggle:hover{ border-color: var(--accent); }
 .music-toggle.playing{ color: var(--accent); border-color: var(--accent); }
+
+.water-overlay{
+  position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(rgba(20,70,110,0.0), rgba(10,40,70,0.45));
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}

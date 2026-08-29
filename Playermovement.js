@@ -1,44 +1,64 @@
 // playerMovement.js
 //
-// WASD + mouse-look movement. The island's accessible area is no longer
-// a hard wall — the player CAN walk past ACCESS_RADIUS, but a 10-second
-// grace period starts the moment they cross it. A callback fires each
-// frame with the seconds remaining (or null when back inside/safe), so
-// the UI layer can show a "go back inside" warning with a countdown.
-// If the timer runs out while still outside, the player is gently
-// pushed back to just inside the boundary.
+// WASD + mouse-look movement. The island's accessible area is a soft
+// boundary (ACCESS_RADIUS) — walking past it starts a 10-second grace
+// period before a gentle push back inside. Walking into water is now
+// its own distinct feel: swimming is slower than walking, jumping is
+// disabled, the camera floats and bobs at the surface instead of
+// standing on the seafloor, and the transition between walking and
+// swimming eases smoothly rather than snapping. A callback reports the
+// current water depth each frame so the UI can show a tint overlay.
 
 import * as THREE from "three";
 import { ACCESS_RADIUS } from "./voxelWorld.js";
 
 const MOVE_SPEED = 4.5;
-const JUMP_VELOCITY = 8.2;      // was 5.2 — noticeably higher, more visible arc
-const GRAVITY = 15;             // slightly higher than default so the jump still lands crisply, not floaty
-const EYE_HEIGHT = 2.3;         // was 1.7 — taller, more natural standing perspective
-const CROUCH_HEIGHT = 1.5;      // scaled up to match the new eye height
+const SWIM_SPEED = 2.2;         // noticeably slower than walking — water has resistance
+const JUMP_VELOCITY = 8.2;
+const GRAVITY = 15;
+const EYE_HEIGHT = 2.3;
+const CROUCH_HEIGHT = 1.5;
+const SWIM_EYE_HEIGHT = 0.9;    // how high above the water surface the camera floats while swimming
 const MOUSE_SENSITIVITY = 0.0022;
 const BORDER_GRACE_SECONDS = 10;
-const LANDING_SETTLE = 0.12;    // seconds — camera eases into the floor on landing instead of snapping
+const LANDING_SETTLE = 0.12;
+const WATER_ENTRY_THRESHOLD = 0.15; // depth (world units) before we count the player as "in water"
+const VERTICAL_EASE_SPEED = 3.5;    // how quickly the camera eases toward its target height (land <-> water)
+const SWIM_BOB_SPEED = 1.6;
+const SWIM_BOB_AMOUNT = 0.07;
 
 const _levelEuler = new THREE.Euler(0, 0, 0, "YXZ");
 
-export function initPlayerMovement({ canvas, camera, getGroundHeight, center, controls, onBorderWarning }) {
+export function initPlayerMovement({
+  canvas,
+  camera,
+  getGroundHeight,
+  getWaterDepth,
+  center,
+  controls,
+  onBorderWarning,
+  onWaterStateChange,
+  spawnSplash,
+}) {
   let enabled = false;
   let yaw = Math.PI;
   let pitch = 0;
   let velocityY = 0;
   let grounded = true;
   let crouching = false;
-  let borderTimer = 0; // seconds spent continuously outside ACCESS_RADIUS
+  let borderTimer = 0;
   let landingBobTimer = 0;
   let landingBobMagnitude = 0;
+  let swimBobTime = 0;
+  let inWater = false;
 
   const keys = new Set();
 
   function onKeyDown(e) {
     if (!enabled) return;
     keys.add(e.code);
-    if (e.code === controls.jump && grounded) {
+    // Jumping is disabled while swimming — treading water doesn't launch you.
+    if (e.code === controls.jump && grounded && !inWater) {
       velocityY = JUMP_VELOCITY;
       grounded = false;
     }
@@ -82,14 +102,14 @@ export function initPlayerMovement({ canvas, camera, getGroundHeight, center, co
     borderTimer = 0;
     landingBobTimer = 0;
     landingBobMagnitude = 0;
+    swimBobTime = 0;
+    inWater = false;
     if (onBorderWarning) onBorderWarning(null);
+    if (onWaterStateChange) onWaterStateChange(0);
     applyLevelRotation();
   }
   spawn();
 
-  // Pushes the player back to just inside the boundary, along the same
-  // angle they wandered out on (so it feels like a nudge, not a teleport
-  // to spawn).
   function snapBackInside() {
     const dx = camera.position.x - center;
     const dz = camera.position.z - center;
@@ -102,6 +122,19 @@ export function initPlayerMovement({ canvas, camera, getGroundHeight, center, co
   function update(dt) {
     if (!enabled) return;
 
+    const depth = getWaterDepth ? getWaterDepth(camera.position.x, camera.position.z) : 0;
+    const nowInWater = depth > WATER_ENTRY_THRESHOLD;
+    if (nowInWater !== inWater) {
+      inWater = nowInWater;
+      if (onWaterStateChange) onWaterStateChange(inWater ? depth : 0);
+      // Splash only on the moment of ENTERING water, not when leaving it.
+      if (inWater && spawnSplash) {
+        spawnSplash(camera.position.x, camera.position.z);
+      }
+    } else if (inWater && onWaterStateChange) {
+      onWaterStateChange(depth); // keep reporting depth while already swimming, for tint intensity
+    }
+
     const forward = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
     const right = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
 
@@ -111,39 +144,54 @@ export function initPlayerMovement({ canvas, camera, getGroundHeight, center, co
     if (keys.has(controls.moveRight)) move.add(right);
     if (keys.has(controls.moveLeft)) move.sub(right);
 
+    const speed = inWater ? SWIM_SPEED : MOVE_SPEED;
     if (move.lengthSq() > 0) {
-      move.normalize().multiplyScalar(MOVE_SPEED * dt);
-      // No boundary clamp here anymore — the player is free to walk
-      // past ACCESS_RADIUS. The consequence is handled below instead.
+      move.normalize().multiplyScalar(speed * dt);
       camera.position.x += move.x;
       camera.position.z += move.z;
     }
 
-    velocityY -= GRAVITY * dt;
-    camera.position.y += velocityY * dt;
-
-    const groundH = getGroundHeight(camera.position.x, camera.position.z);
-    const eye = crouching ? CROUCH_HEIGHT : EYE_HEIGHT;
-    const floorY = groundH + eye;
-
-    if (camera.position.y <= floorY) {
-      if (!grounded) {
-        // just landed — the harder the fall, the more visible the settle dip
-        landingBobMagnitude = Math.min(0.35, Math.abs(velocityY) * 0.03);
-        landingBobTimer = LANDING_SETTLE;
-      }
-      camera.position.y = floorY;
+    if (inWater) {
+      // Swimming: no gravity, no falling — the camera eases toward a
+      // floating height at the water surface, with a gentle bob so it
+      // doesn't feel perfectly rigid (like treading water).
       velocityY = 0;
-      grounded = true;
+      grounded = false;
+
+      swimBobTime += dt * SWIM_BOB_SPEED;
+      const bob = Math.sin(swimBobTime) * SWIM_BOB_AMOUNT;
+      const targetY = WATER_LEVEL_FOR_CAMERA() + SWIM_EYE_HEIGHT + bob;
+
+      // Ease vertically instead of snapping — this is what makes entering
+      // the water read as "wading in" rather than teleporting onto a float.
+      camera.position.y += (targetY - camera.position.y) * Math.min(1, VERTICAL_EASE_SPEED * dt);
+    } else {
+      // Normal walking physics.
+      velocityY -= GRAVITY * dt;
+      camera.position.y += velocityY * dt;
+
+      const groundH = getGroundHeight(camera.position.x, camera.position.z);
+      const eye = crouching ? CROUCH_HEIGHT : EYE_HEIGHT;
+      const floorY = groundH + eye;
+
+      if (camera.position.y <= floorY) {
+        if (!grounded) {
+          landingBobMagnitude = Math.min(0.35, Math.abs(velocityY) * 0.03);
+          landingBobTimer = LANDING_SETTLE;
+        }
+        camera.position.y = floorY;
+        velocityY = 0;
+        grounded = true;
+      }
+
+      if (landingBobTimer > 0) {
+        landingBobTimer = Math.max(0, landingBobTimer - dt);
+        const t = landingBobTimer / LANDING_SETTLE;
+        camera.position.y -= landingBobMagnitude * t;
+      }
     }
 
-    if (landingBobTimer > 0) {
-      landingBobTimer = Math.max(0, landingBobTimer - dt);
-      const t = landingBobTimer / LANDING_SETTLE; // eases 1 -> 0
-      camera.position.y -= landingBobMagnitude * t;
-    }
-
-    // ── Border grace-period logic ──
+    // ── Border grace-period logic (unchanged) ──
     const dx = camera.position.x - center;
     const dz = camera.position.z - center;
     const distFromCenter = Math.sqrt(dx * dx + dz * dz);
@@ -159,12 +207,18 @@ export function initPlayerMovement({ canvas, camera, getGroundHeight, center, co
         if (onBorderWarning) onBorderWarning(null);
       }
     } else if (borderTimer > 0) {
-      // player made it back inside in time — clear the warning
       borderTimer = 0;
       if (onBorderWarning) onBorderWarning(null);
     }
 
     applyLevelRotation();
+  }
+
+  // The world's water plane sits at y = 0 (WATER_LEVEL in voxelWorld.js).
+  // Kept as a tiny local helper so this file doesn't need to import the
+  // constant just for one number.
+  function WATER_LEVEL_FOR_CAMERA() {
+    return 0;
   }
 
   let disposed = false;
@@ -186,7 +240,9 @@ export function initPlayerMovement({ canvas, camera, getGroundHeight, center, co
     disable() {
       enabled = false;
       borderTimer = 0;
+      inWater = false;
       if (onBorderWarning) onBorderWarning(null);
+      if (onWaterStateChange) onWaterStateChange(0);
       if (document.pointerLockElement === canvas) document.exitPointerLock();
     },
     dispose() {

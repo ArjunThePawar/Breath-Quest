@@ -12,7 +12,7 @@ import { updateSaveStats } from "./savesystem.js";
 
 // Starts the game. Tries the microphone first (the intended experience);
 // if the user denies permission or has no mic, falls back to keyboard
-// (hold SPACE) input so the game is still playable.
+// (hold B) input so the game is still playable.
 export async function startGame({ world, hud, onWin }) {
   let input;
   let usingMic = true;
@@ -24,7 +24,7 @@ export async function startGame({ world, hud, onWin }) {
       s.getTracks().forEach((t) => t.stop())
     );
   } catch (err) {
-    console.warn("Microphone unavailable, falling back to keyboard input (hold SPACE).", err);
+    console.warn("Microphone unavailable, falling back to keyboard input (hold B).", err);
     input = new KeyboardBreathInput(window);
     usingMic = false;
   }
@@ -48,7 +48,24 @@ export async function startGame({ world, hud, onWin }) {
     if (onWin) onWin(e.detail);
   });
 
+  // The engine itself may swap from mic to keyboard mid-session if it
+  // never picks up genuine mouth-breathing (see GameEngine._tick /
+  // _switchToKeyboardFallback in gameLoop.js). Reflect that in the HUD
+  // so the player knows what changed and how to keep playing.
+  engine.addEventListener("inputfallback", () => {
+    hud.setInputMode("keyboard");
+    hud.flashInputMessage(
+      "No steady mouth-breathing detected — switched to keyboard input. Hold B to breathe.",
+      { persist: true }
+    );
+  });
+
   hud.setInputMode(usingMic ? "mic" : "keyboard");
+  hud.flashInputMessage(
+    usingMic
+      ? "Breathe calmly through your mouth into the mic — silence won't stabilize the world."
+      : "Microphone unavailable — hold B to breathe."
+  );
 
   await engine.start();
   return engine;

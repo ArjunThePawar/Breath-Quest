@@ -9,7 +9,7 @@ import { GameEngine } from "./gameLoop.js";
 async function main() {
   // Choose your input source here:
   // - MicBreathInput()      -> real breathing via microphone
-  // - KeyboardBreathInput() -> hold SPACE to simulate breathing (for testing)
+  // - KeyboardBreathInput() -> hold B to simulate breathing (for testing)
   const input = new MicBreathInput();
   // const input = new KeyboardBreathInput(window);
 

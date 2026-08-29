@@ -50,6 +50,16 @@ export class WorldStability extends EventTarget {
       case "erratic":
         delta = -CONFIG.STABILITY_LOSS_ERRATIC;
         break;
+      case "idle":
+        // No genuine breath was detected this tick (the player is
+        // silent/still, or breathing briefly dropped out). This must
+        // NEVER map to a gain - otherwise doing nothing at all would
+        // slowly win the game on its own. A gentle decay instead of a
+        // flat 0 also closes an edge case: reaching high stability via
+        // real calm breathing and then going silent to coast through
+        // the win-hold window for free.
+        delta = -CONFIG.STABILITY_DECAY_IDLE;
+        break;
       default:
         delta = 0;    // unknown state - no change
     }

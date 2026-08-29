@@ -26,6 +26,10 @@ export const CONFIG = {
   STABILITY_GAIN_MODERATE: 0.1,    // moderate breathing raises it very slightly
   STABILITY_LOSS_PANICKED: 1.0,    // panicked breathing lowers it noticeably
   STABILITY_LOSS_ERRATIC: 0.6,     // erratic (irregular) breathing lowers it moderately
+  STABILITY_DECAY_IDLE: 0.15,      // NO genuine breathing detected this tick - gently DRAINS
+                                    // stability instead of granting free gain. This is what
+                                    // stops the game from being winnable by just staying silent:
+                                    // silence/no-input must never be treated as "moderate breathing".
 
   // Crossing these thresholds changes the "zone" of the world.
   STABILITY_CHAOTIC_THRESHOLD: 30,  // at/below this value, world = "chaotic"
@@ -38,12 +42,19 @@ export const CONFIG = {
 
   // Game loop timing 
   TICK_INTERVAL_MS: 500,     // how often (ms) the game re-evaluates stability/power
-  NO_INPUT_TIMEOUT_MS: 4000, // if no new breath detected in this long, drift to "moderate"
+  NO_INPUT_TIMEOUT_MS: 4000, // if no new breath detected in this long, count the tick as "idle"
+                              // (see STABILITY_DECAY_IDLE - idle NEVER grants gain)
 
   //  Microphone input settings 
   MIC_FFT_SIZE: 1024,           // size of the audio analysis buffer (must be a power of 2)
   MIC_PEAK_THRESHOLD: 0.15,     // how much louder than the noise floor counts as a "breath"
   MIC_MIN_PEAK_GAP_MS: 700,     // ignore peaks closer together than this (prevents double-counting one breath)
+  MIN_BREATH_PHASE_MS: 180,     // a loud moment only counts as a real inhale/exhale once it has
+                                 // stayed above the threshold for this long - filters out short
+                                 // clicks, pops, taps, and stray noise that aren't actual mouth-breathing
+  MIC_FALLBACK_TIMEOUT_MS: 10000,// if the mic never picks up a single genuine breath phase for this
+                                 // long (game start, or after breathing stops being detected),
+                                 // automatically switch to keyboard (hold B) input
 
   //  Alarm settings (plays when the world becomes chaotic)
   ALARM_FREQUENCY_HZ: 880,   // pitch of the alarm tone

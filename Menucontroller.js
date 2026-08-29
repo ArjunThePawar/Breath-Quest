@@ -241,11 +241,13 @@ export function initApp() {
   const powerFillEl = document.getElementById("powerFill");
   const breathStateEl = document.getElementById("breathStateValue");
   const zoneBanner = document.getElementById("zoneBanner");
+  const inputBanner = document.getElementById("inputBanner");
   const winBanner = document.getElementById("winBanner");
   const winBannerText = document.getElementById("winBannerText");
   const inputModeEl = document.getElementById("inputModeValue");
 
   let zoneBannerTimeout = null;
+  let inputBannerTimeout = null;
 
   const hud = {
     update({ breath, stability, power }) {
@@ -264,12 +266,26 @@ export function initApp() {
       clearTimeout(zoneBannerTimeout);
       zoneBannerTimeout = setTimeout(() => zoneBanner.classList.remove("show"), 2200);
     },
+    // Shows a short instructional/status message about breath INPUT
+    // itself - e.g. reminding the player to breathe through their mouth
+    // into the mic, or telling them the game switched to keyboard
+    // because no real mouth-breathing was detected. Pass persist:true
+    // to keep it on screen instead of auto-fading (used for the
+    // fallback notice, since that's an important, lasting change).
+    flashInputMessage(text, { persist = false } = {}) {
+      inputBanner.textContent = text;
+      inputBanner.classList.add("show");
+      clearTimeout(inputBannerTimeout);
+      if (!persist) {
+        inputBannerTimeout = setTimeout(() => inputBanner.classList.remove("show"), 6000);
+      }
+    },
     showWin(heldDurationMs) {
       winBannerText.textContent = `Held maximum power for ${(heldDurationMs / 1000).toFixed(1)}s`;
       winBanner.classList.add("show");
     },
     setInputMode(mode) {
-      inputModeEl.textContent = mode === "mic" ? "Microphone" : "Keyboard (hold SPACE)";
+      inputModeEl.textContent = mode === "mic" ? "Microphone" : "Keyboard (hold B)";
     },
   };
 
@@ -280,6 +296,7 @@ export function initApp() {
     player.enable();
     winBanner.classList.remove("show");
     borderWarningEl.classList.remove("show");
+    inputBanner.classList.remove("show");
     waterOverlayEl.style.opacity = 0;
     try {
       await startGame({ world, hud });
@@ -296,13 +313,16 @@ export function initApp() {
     world.setOrbiting(true);
     world.setMood("stable");
     borderWarningEl.classList.remove("show");
+    inputBanner.classList.remove("show");
     waterOverlayEl.style.opacity = 0;
     refreshMainMenu();
     showScreen("main");
   }
 
   document.getElementById("escToMenuBtn").addEventListener("click", () => {
-    
+    // Note: this does not stop the running GameEngine (no exposed handle
+    // here) — for a full "pause/quit" flow, have gameBootstrap.startGame
+    // return the engine instance and call engine.stop() before this.
     returnToMenu();
   });
 }

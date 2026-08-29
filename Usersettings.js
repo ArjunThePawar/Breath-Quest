@@ -35,9 +35,9 @@ export function getDefaultSettings() {
       moveBackward: "KeyS",
       moveLeft: "KeyA",
       moveRight: "KeyD",
-      jump: "Space",        // NOTE: collides with keyboard breath input's
-                             // Space trigger if KeyboardBreathInput is used
-                             // instead of MicBreathInput. Safe with mic input.
+      jump: "Space",        // Keyboard breath input now uses the B key
+                             // (not Space), so jump no longer collides
+                             // with it even when KeyboardBreathInput is active.
       crouch: "ShiftLeft",
     },
   };

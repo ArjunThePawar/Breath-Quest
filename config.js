@@ -52,9 +52,9 @@ export const CONFIG = {
   MIN_BREATH_PHASE_MS: 180,     // a loud moment only counts as a real inhale/exhale once it has
                                  // stayed above the threshold for this long - filters out short
                                  // clicks, pops, taps, and stray noise that aren't actual mouth-breathing
-  MIC_FALLBACK_TIMEOUT_MS: 10000,// if the mic never picks up a single genuine breath phase for this
+  MIC_FALLBACK_TIMEOUT_MS: 20000,// if the mic never picks up a single genuine breath phase for this
                                  // long (game start, or after breathing stops being detected),
-                                 // automatically switch to keyboard (hold B) input
+                                 // automatically switch to keyboard (press B) input
 
   //  Alarm settings (plays when the world becomes chaotic)
   ALARM_FREQUENCY_HZ: 880,   // pitch of the alarm tone

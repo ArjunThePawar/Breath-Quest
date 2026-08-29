@@ -52,9 +52,11 @@ export class BreathInputSource extends EventTarget {
 }
 
 //  Keyboard input (for testing without a microphone) 
-// Holding the B key down counts as one breath moment. This lets
-// developers simulate slow (calm) or fast (panicked) breathing just by
-// tapping the key at different speeds.
+// Each press of the B key counts as one breath moment (a single tap,
+// not a hold) - like tapping out an inhale or an exhale. The RHYTHM of
+// taps is what matters, exactly like real mouth-breathing into the mic:
+// press it roughly once every ~4-5 seconds for calm/normal breathing,
+// and faster, more frequent taps for panicked breathing.
 export class KeyboardBreathInput extends BreathInputSource {
   constructor(targetElement = window) {
     super();

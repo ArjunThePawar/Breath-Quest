@@ -285,7 +285,7 @@ export function initApp() {
       winBanner.classList.add("show");
     },
     setInputMode(mode) {
-      inputModeEl.textContent = mode === "mic" ? "Microphone" : "Keyboard (hold B)";
+      inputModeEl.textContent = mode === "mic" ? "Microphone" : "Keyboard (press B)";
     },
   };
 

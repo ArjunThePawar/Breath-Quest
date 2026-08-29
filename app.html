@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Breath Quest</title>
+<link rel="stylesheet" href="./style.css" />
+
+<!-- Resolves the bare "three" import used inside voxelWorld.js -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+
+  <canvas id="worldCanvas"></canvas>
+
+  <!-- ===== MAIN MENU ===== -->
+  <div class="screen" id="mainMenu">
+    <div class="panel">
+      <h1 class="game-title">BREATH QUEST</h1>
+      <button class="menu-btn" id="newGameBtn">New Game</button>
+      <button class="menu-btn" id="continueBtn" disabled>Continue</button>
+      <button class="menu-btn" id="settingsBtn">Settings</button>
+      <div class="menu-sub">calm breathing stabilizes the world</div>
+    </div>
+  </div>
+
+  <!-- ===== SETTINGS MENU ===== -->
+  <div class="screen hidden" id="settingsMenu">
+    <div class="panel settings-panel">
+      <h1 class="game-title" style="font-size:16px;">SETTINGS</h1>
+
+      <div class="settings-row">
+        <label>Volume <span class="settings-value" id="volumeVal">50</span></label>
+        <input type="range" id="volumeSlider" min="0" max="100" value="50" />
+      </div>
+
+      <div class="settings-row">
+        <label>Brightness <span class="settings-value" id="brightnessVal">50</span></label>
+        <input type="range" id="brightnessSlider" min="0" max="100" value="50" />
+      </div>
+
+      <div class="settings-row">
+        <label>Mic Sensitivity <span class="settings-value" id="sensitivityVal">50</span></label>
+        <input type="range" id="sensitivitySlider" min="0" max="100" value="50" />
+      </div>
+
+      <div class="settings-row">
+        <label>Controls</label>
+        <div class="controls-grid" id="controlsGrid"></div>
+        <div class="menu-sub" style="text-align:left; margin-top:4px;">
+          Movement isn't wired to gameplay yet — bindings are saved for future use.
+        </div>
+      </div>
+
+      <button class="menu-btn back-btn" id="backFromSettingsBtn">Back</button>
+    </div>
+  </div>
+
+  <!-- ===== IN-GAME HUD ===== -->
+  <div id="hud">
+    <div class="hud-topbar">
+      <div class="stat-block">
+        <div class="stat-label">World Stability</div>
+        <div class="stat-value"><span id="stabilityValue">60</span>%</div>
+        <div class="bar-track"><div class="bar-fill" id="stabilityFill" style="width:60%"></div></div>
+      </div>
+      <div class="stat-block">
+        <div class="stat-label">Power</div>
+        <div class="stat-value"><span id="powerValue">10</span></div>
+        <div class="bar-track"><div class="bar-fill" id="powerFill" style="width:10%"></div></div>
+      </div>
+      <div class="stat-block">
+        <div class="stat-label">Breath State</div>
+        <div class="stat-value" id="breathStateValue">moderate</div>
+        <div class="stat-label" style="margin-top:6px;">Input: <span id="inputModeValue">—</span></div>
+      </div>
+    </div>
+
+    <div class="zone-banner" id="zoneBanner"></div>
+
+    <div class="win-banner" id="winBanner">
+      <h2>WORLD STABILIZED</h2>
+      <p id="winBannerText"></p>
+      <button class="menu-btn" id="escToMenuBtn" style="pointer-events:all;">Return to Menu</button>
+    </div>
+
+    <div class="esc-hint">breathe calmly and steadily</div>
+  </div>
+
+  <script type="module">
+    import { initApp } from "./menuController.js";
+    initApp();
+  </script>
+</body>
+</html>

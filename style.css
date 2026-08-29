@@ -1,0 +1,193 @@
+/* style.css  (NEW FILE) */
+
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Space+Grotesk:wght@400;500;600&display=swap');
+
+:root{
+  --panel-bg: rgba(10, 16, 11, 0.82);
+  --panel-border: rgba(160, 220, 160, 0.25);
+  --ink: #eae7d8;
+  --muted: #9db09a;
+  --accent: #7fe0a0;
+  --accent-warm: #ffcf7a;
+  --danger: #ff7a63;
+}
+
+*{ box-sizing: border-box; }
+html, body{
+  margin:0; padding:0; width:100%; height:100%;
+  background:#000;
+  font-family:'Space Grotesk', sans-serif;
+  color: var(--ink);
+  overflow:hidden;
+}
+
+#worldCanvas{
+  position: fixed; inset: 0; width:100%; height:100%; display:block;
+}
+
+.screen{
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  transition: opacity 0.35s ease, visibility 0.35s ease;
+}
+.screen.hidden{ opacity: 0; visibility: hidden; pointer-events: none; }
+
+.panel{
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 36px 40px;
+  min-width: 320px;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 0 60px rgba(0,0,0,0.5), inset 0 0 40px rgba(127,224,160,0.03);
+}
+
+.game-title{
+  font-family: 'Press Start 2P', monospace;
+  font-size: 22px;
+  color: var(--accent);
+  text-align: center;
+  margin: 0 0 30px 0;
+  text-shadow: 0 0 18px rgba(127,224,160,0.5);
+  letter-spacing: 1px;
+}
+
+.menu-btn{
+  display: block;
+  width: 100%;
+  margin: 10px 0;
+  padding: 14px 20px;
+  background: rgba(127,224,160,0.10);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  color: var(--ink);
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.1s ease;
+}
+.menu-btn:hover{ background: rgba(127,224,160,0.2); border-color: var(--accent); }
+.menu-btn:active{ transform: scale(0.98); }
+
+.menu-btn.darkened{
+  opacity: 0.45;
+  filter: grayscale(0.4);
+}
+.menu-btn.darkened::after{
+  content: " (overwrite)";
+  font-size: 11px;
+  color: var(--danger);
+}
+
+.menu-btn:disabled{
+  opacity: 0.3;
+  cursor: not-allowed;
+  filter: grayscale(0.6);
+}
+
+.menu-sub{
+  text-align:center; color: var(--muted); font-size: 12px; margin-top: 18px;
+}
+
+/* settings */
+.settings-panel{ min-width: 420px; }
+.settings-row{
+  margin: 20px 0;
+}
+.settings-row label{
+  display:block; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 8px;
+}
+.settings-row input[type="range"]{
+  width: 100%; accent-color: var(--accent);
+}
+.settings-value{ float: right; color: var(--accent); font-family: monospace; }
+
+.controls-grid{
+  display: grid; grid-template-columns: 1fr auto; gap: 8px 16px; align-items: center;
+  margin: 16px 0;
+}
+.controls-grid .action-name{ font-size: 13px; color: var(--ink); }
+.keybind-btn{
+  background: rgba(255,255,255,0.06);
+  border: 1px solid var(--panel-border);
+  color: var(--accent-warm);
+  padding: 6px 14px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 12px;
+  cursor: pointer;
+  min-width: 90px;
+}
+.keybind-btn.listening{
+  color: var(--danger);
+  border-color: var(--danger);
+  animation: pulse 1s ease-in-out infinite;
+}
+@keyframes pulse{ 0%,100%{opacity:1} 50%{opacity:0.5} }
+
+.tab-row{ display:flex; gap: 8px; margin-bottom: 22px; }
+.tab-btn{
+  flex:1; padding: 8px; background: transparent; border: 1px solid var(--panel-border);
+  color: var(--muted); border-radius: 6px; cursor: pointer; font-size: 12px;
+}
+.tab-btn.active{ color: var(--accent); border-color: var(--accent); background: rgba(127,224,160,0.08); }
+
+.back-btn{
+  margin-top: 24px;
+}
+
+/* HUD (in-game overlay) */
+#hud{
+  position: fixed; inset: 0; pointer-events: none;
+  display: none;
+  font-family: monospace;
+}
+#hud.active{ display: block; }
+
+.hud-topbar{
+  position: absolute; top: 20px; left: 20px; right: 20px;
+  display: flex; justify-content: space-between; align-items: flex-start;
+}
+
+.stat-block{
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 10px 16px;
+  min-width: 180px;
+}
+.stat-block .stat-label{ font-size: 10px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
+.stat-block .stat-value{ font-size: 18px; color: var(--accent); margin-top: 4px; }
+.bar-track{ height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; margin-top: 6px; overflow:hidden; }
+.bar-fill{ height: 100%; background: var(--accent); transition: width 0.3s ease, background 0.3s ease; }
+
+.zone-banner{
+  position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+  background: rgba(0,0,0,0.6);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  padding: 8px 20px; border-radius: 6px;
+  font-size: 12px; letter-spacing: 0.08em;
+  opacity: 0; transition: opacity 0.4s ease;
+}
+.zone-banner.show{ opacity: 1; }
+
+.win-banner{
+  position: absolute; top: 40%; left: 50%; transform: translate(-50%,-50%);
+  background: var(--panel-bg);
+  border: 1px solid var(--accent);
+  padding: 30px 50px; border-radius: 10px;
+  text-align: center;
+  opacity: 0; visibility: hidden;
+  transition: opacity 0.4s ease, visibility 0.4s ease;
+}
+.win-banner.show{ opacity: 1; visibility: visible; pointer-events: all; }
+.win-banner h2{ font-family: 'Press Start 2P', monospace; color: var(--accent); font-size: 18px; }
+
+.esc-hint{
+  position: absolute; bottom: 20px; right: 20px;
+  color: var(--muted); font-size: 11px;
+}

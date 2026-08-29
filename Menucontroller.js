@@ -7,6 +7,7 @@
 // game files directly except by importing their already-exported classes.
 
 import { initVoxelWorld } from "./voxelWorld.js";
+import { initPlayerMovement } from "./Playermovement.js";
 import {
   loadSettings,
   saveSettings,
@@ -25,6 +26,18 @@ export function initApp() {
   let settings = loadSettings();
   applySettingsToConfig(settings);
   world.setBrightness(settings.brightness);
+
+  // Movement is purely visual (walks the camera around the accessible
+  // island area) — it does not touch breath/stability/power at all.
+  // settings.controls is passed by reference, so remapping keys in the
+  // settings menu takes effect immediately without re-creating this.
+  const player = initPlayerMovement({
+    canvas,
+    camera: world.camera,
+    getGroundHeight: world.getGroundHeight,
+    center: world.CENTER,
+    controls: settings.controls,
+  });
 
   // ---- screen elements ----
   const screens = {
@@ -196,6 +209,7 @@ export function initApp() {
     showScreen(null);
     hudEl.classList.add("active");
     world.setOrbiting(false);
+    player.enable();
     winBanner.classList.remove("show");
     try {
       await startGame({ world, hud });
@@ -208,6 +222,7 @@ export function initApp() {
 
   function returnToMenu() {
     hudEl.classList.remove("active");
+    player.disable();
     world.setOrbiting(true);
     world.setMood("stable");
     refreshMainMenu();

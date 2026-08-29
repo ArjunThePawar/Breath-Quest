@@ -1,13 +1,17 @@
-// menuController.js  (NEW FILE)
+// menuController.js
 //
 // Builds and wires up: main menu (New Game / Continue / Settings),
 // the settings sub-menu (volume / brightness / sensitivity / controls),
-// and the in-game HUD. Talks to userSettings.js, saveSystem.js,
-// voxelWorld.js, and gameBootstrap.js — never touches your original
-// game files directly except by importing their already-exported classes.
+// and the in-game HUD — including the border-warning countdown shown
+// when the player wanders past the island's accessible-area radius,
+// and an always-visible background music toggle. Talks to
+// userSettings.js, saveSystem.js, voxelWorld.js, musicSystem.js, and
+// gameBootstrap.js — never touches the original game files directly
+// except by importing their already-exported classes.
 
 import { initVoxelWorld } from "./voxelWorld.js";
 import { initPlayerMovement } from "./Playermovement.js";
+import { initMusicSystem } from "./Musicsystem.js";
 import {
   loadSettings,
   saveSettings,
@@ -27,16 +31,64 @@ export function initApp() {
   applySettingsToConfig(settings);
   world.setBrightness(settings.brightness);
 
-  // Movement is purely visual (walks the camera around the accessible
-  // island area) — it does not touch breath/stability/power at all.
-  // settings.controls is passed by reference, so remapping keys in the
-  // settings menu takes effect immediately without re-creating this.
+  // ---- HUD elements needed before initPlayerMovement, since the
+  // border-warning callback references borderWarningEl directly ----
+  const hudEl = document.getElementById("hud");
+  const borderWarningEl = document.getElementById("borderWarning");
+
+  // ================= BACKGROUND MUSIC =================
+  // Fully original, generated live via Web Audio oscillators (see
+  // musicSystem.js) — no audio files, no copyright concerns. Browsers
+  // block audio until a user gesture happens, so if music was left on
+  // from a previous session we start it on the player's first click or
+  // keypress rather than trying (and failing) to autoplay immediately.
+  const music = initMusicSystem();
+  music.setVolume(settings.volume);
+
+  const musicToggleBtn = document.getElementById("musicToggleBtn");
+  function refreshMusicButton() {
+    const on = music.isPlaying();
+    musicToggleBtn.textContent = on ? "🎵 Music: On" : "🔇 Music: Off";
+    musicToggleBtn.classList.toggle("playing", on);
+  }
+  refreshMusicButton();
+
+  musicToggleBtn.addEventListener("click", () => {
+    settings.musicEnabled = music.toggle();
+    saveSettings(settings);
+    refreshMusicButton();
+  });
+
+  if (settings.musicEnabled) {
+    const unlockAudio = () => {
+      music.start();
+      refreshMusicButton();
+    };
+    window.addEventListener("pointerdown", unlockAudio, { once: true });
+    window.addEventListener("keydown", unlockAudio, { once: true });
+  }
+
+  // Movement is purely visual (walks the camera around the island) —
+  // it does not touch breath/stability/power at all. settings.controls
+  // is passed by reference, so remapping keys in the settings menu
+  // takes effect immediately without re-creating this. The player can
+  // now walk past ACCESS_RADIUS freely; onBorderWarning fires with the
+  // seconds remaining (or null when safe/inside) so the HUD can show
+  // a "go back inside" countdown instead of a hard wall.
   const player = initPlayerMovement({
     canvas,
     camera: world.camera,
     getGroundHeight: world.getGroundHeight,
     center: world.CENTER,
     controls: settings.controls,
+    onBorderWarning(secondsLeft) {
+      if (secondsLeft === null) {
+        borderWarningEl.classList.remove("show");
+        return;
+      }
+      borderWarningEl.textContent = `Go back inside the border! ${secondsLeft.toFixed(1)}s`;
+      borderWarningEl.classList.add("show");
+    },
   });
 
   // ---- screen elements ----
@@ -44,7 +96,6 @@ export function initApp() {
     main: document.getElementById("mainMenu"),
     settings: document.getElementById("settingsMenu"),
   };
-  const hudEl = document.getElementById("hud");
 
   function showScreen(name) {
     Object.values(screens).forEach((s) => s.classList.add("hidden"));
@@ -102,6 +153,7 @@ export function initApp() {
     saveSettings(settings);
     applySettingsToConfig(settings);
     world.setBrightness(settings.brightness);
+    music.setVolume(settings.volume);
   }
 
   volumeSlider.addEventListener("input", (e) => {
@@ -211,6 +263,7 @@ export function initApp() {
     world.setOrbiting(false);
     player.enable();
     winBanner.classList.remove("show");
+    borderWarningEl.classList.remove("show");
     try {
       await startGame({ world, hud });
     } catch (err) {
@@ -225,6 +278,7 @@ export function initApp() {
     player.disable();
     world.setOrbiting(true);
     world.setMood("stable");
+    borderWarningEl.classList.remove("show");
     refreshMainMenu();
     showScreen("main");
   }

@@ -191,3 +191,31 @@ html, body{
   position: absolute; bottom: 20px; right: 20px;
   color: var(--muted); font-size: 11px;
 }
+.border-warning{
+  position: absolute; bottom: 70px; left: 50%; transform: translateX(-50%);
+  background: rgba(0,0,0,0.65);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  padding: 10px 22px; border-radius: 6px;
+  font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase;
+  opacity: 0; transition: opacity 0.25s ease;
+  text-align: center;
+}
+.border-warning.show{ opacity: 1; animation: pulse 1s ease-in-out infinite; }
+
+.music-toggle{
+  position: fixed; bottom: 20px; left: 20px; z-index: 30;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  color: var(--muted);
+  padding: 9px 16px;
+  border-radius: 20px;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  transition: border-color 0.2s ease, color 0.2s ease;
+}
+.music-toggle:hover{ border-color: var(--accent); }
+.music-toggle.playing{ color: var(--accent); border-color: var(--accent); }

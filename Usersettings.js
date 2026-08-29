@@ -1,11 +1,11 @@
 // userSettings.js  (NEW FILE — does not modify config.js, breathInput.js, etc.)
 //
 // Owns all player-adjustable settings: volume, brightness, sensitivity,
-// and key bindings. Settings are persisted to localStorage and, where
-// relevant, applied to the existing CONFIG object at runtime by mutating
-// its properties (CONFIG is a plain object, so this does not require
-// editing config.js itself — it just overrides values before the game
-// starts).
+// music on/off, and key bindings. Settings are persisted to
+// localStorage and, where relevant, applied to the existing CONFIG
+// object at runtime by mutating its properties (CONFIG is a plain
+// object, so this does not require editing config.js itself — it just
+// overrides values before the game starts).
 
 import { CONFIG } from "./config.js";
 
@@ -26,9 +26,10 @@ const BASE = {
 // for whenever movement code is added.
 export function getDefaultSettings() {
   return {
-    volume: 50,       // 0-100, maps to CONFIG.ALARM_VOLUME
-    brightness: 50,    // 0-100, maps to renderer exposure in voxelWorld.js
-    sensitivity: 50,   // 0-100, maps to mic peak threshold / gap
+    volume: 50,        // 0-100, maps to CONFIG.ALARM_VOLUME and music volume
+    brightness: 50,     // 0-100, maps to renderer exposure in voxelWorld.js
+    sensitivity: 50,    // 0-100, maps to mic peak threshold / gap
+    musicEnabled: true, // whether the ambient background music should play
     controls: {
       moveForward: "KeyW",
       moveBackward: "KeyS",
@@ -79,6 +80,8 @@ export function applySettingsToConfig(settings) {
 
   // Brightness has no CONFIG equivalent — voxelWorld.js reads
   // settings.brightness directly, so nothing to mutate here.
+  // musicEnabled is read directly by menuController.js — nothing to
+  // mutate on CONFIG for it either.
 }
 
 // Human-readable labels for key codes, used by the controls UI.

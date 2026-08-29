@@ -27,7 +27,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 const ISLAND_RADIUS = 15;   // total visible island radius, in blocks
 export const ACCESS_RADIUS = 8; // the "limited accessible area" boundary radius
 const GRID_SIZE = ISLAND_RADIUS * 2 + 2;
-const CENTER = GRID_SIZE / 2;
+export const CENTER = GRID_SIZE / 2;
 const WATER_LEVEL = 0;
 
 // ---- terrain shaping ----
@@ -366,7 +366,14 @@ export function initVoxelWorld(canvas) {
   resize();
   animate();
 
+  function getGroundHeight(x, z) {
+    return Math.max(WATER_LEVEL, heightAt(x, z));
+  }
+
   return {
+    camera,
+    getGroundHeight,
+    CENTER,
     setMood,
     setBrightness,
     setOrbiting,

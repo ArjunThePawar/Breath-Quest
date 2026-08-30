@@ -109,6 +109,64 @@ function makeGlowTexture() {
   return new THREE.CanvasTexture(c);
 }
 
+// Real Minecraft block textures are 16x16 pixel grids of noisy value
+// variation, not flat colors. This generates that same grain as a
+// GRAYSCALE texture (mid-gray = neutral) so it can be multiplied on
+// top of the existing per-instance block colors (grass/sand/rock)
+// without changing their hue - it just gives every block that
+// speckled, hand-painted-pixel look instead of a flat plastic color.
+// NearestFilter (no smoothing) is what keeps it crisply pixelated
+// instead of blurring into a smooth gradient.
+function makeBlockNoiseTexture() {
+  const size = 16;
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  const ctx = c.getContext("2d");
+  const img = ctx.createImageData(size, size);
+  for (let i = 0; i < size * size; i++) {
+    const shade = 200 + Math.floor(Math.random() * 55); // 200-255: mostly-neutral grain
+    img.data[i * 4 + 0] = shade;
+    img.data[i * 4 + 1] = shade;
+    img.data[i * 4 + 2] = shade;
+    img.data[i * 4 + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(c);
+  tex.magFilter = THREE.NearestFilter;
+  tex.minFilter = THREE.NearestFilter;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+// A 16x16 leaf-cutout texture: noisy green speckle with a scatter of
+// fully-transparent pixels punched through it, exactly like Minecraft's
+// real leaf-block texture (alphaTest cutout, not smooth transparency).
+// This is what makes leaf CUBES actually read as "leaves" instead of
+// solid green boxes - you can see daylight/gaps through the canopy.
+function makeLeafTexture() {
+  const size = 16;
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  const ctx = c.getContext("2d");
+  const img = ctx.createImageData(size, size);
+  for (let i = 0; i < size * size; i++) {
+    const hole = Math.random() < 0.22; // ~22% of pixels punched fully transparent
+    const shade = 190 + Math.floor(Math.random() * 65);
+    img.data[i * 4 + 0] = shade;
+    img.data[i * 4 + 1] = shade;
+    img.data[i * 4 + 2] = shade;
+    img.data[i * 4 + 3] = hole ? 0 : 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(c);
+  tex.magFilter = THREE.NearestFilter;
+  tex.minFilter = THREE.NearestFilter;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
 const skyVertex = `
   varying vec3 vWorldPosition;
   void main() {
@@ -159,13 +217,35 @@ const waterFragment = `
   uniform vec3 uDeepColor;
   uniform vec3 uShallowColor;
   uniform vec3 uCameraPos;
+  uniform vec3 uSunDirection;
+  uniform vec3 uSunColor;
+  uniform vec3 uSkyTop;
+  uniform vec3 uSkyHorizon;
   varying vec3 vWorldPos;
   varying vec3 vNormal;
   void main() {
     vec3 viewDir = normalize(uCameraPos - vWorldPos);
     float fresnel = pow(1.0 - max(dot(viewDir, vNormal), 0.0), 3.0);
     vec3 color = mix(uDeepColor, uShallowColor, fresnel);
-    gl_FragColor = vec4(color, 0.75 + fresnel * 0.2);
+
+    // Real sky reflection: reflect the view ray off the water's
+    // normal, then sample the SAME sky gradient the skybox uses,
+    // based on how high that reflected ray points. This is what makes
+    // the water actually mirror the sky/clouds like a real lake,
+    // instead of just being a flat colored, glassy-looking tint.
+    vec3 reflectDir = reflect(-viewDir, vNormal);
+    float skyT = clamp(reflectDir.y * 0.5 + 0.5, 0.0, 1.0);
+    vec3 reflection = mix(uSkyHorizon, uSkyTop, pow(skyT, 0.6));
+    color = mix(color, reflection, fresnel * 0.85);
+
+    // Bright glossy sun glint (Blinn-Phong highlight) on top of the
+    // reflection - this is what reads as "glassy, reflective" water
+    // catching direct sunlight, not just a flat tint.
+    vec3 halfDir = normalize(viewDir + uSunDirection);
+    float spec = pow(max(dot(vNormal, halfDir), 0.0), 180.0);
+    vec3 glint = uSunColor * spec * 3.0;
+
+    gl_FragColor = vec4(color + glint, 0.55 + fresnel * 0.4);
   }
 `;
 
@@ -234,11 +314,32 @@ export function initVoxelWorld(canvas) {
       sunColor: new THREE.Color(0xfff1c9), sunIntensity: 1.5,
       fogColor: new THREE.Color(0x0e1a12), fogDensity: 0.014, bloom: 1.1,
       skyTop: new THREE.Color(0x2f6fb0), skyHorizon: new THREE.Color(0xdfeeff), skyBottom: new THREE.Color(0x3a4a3a),
+      // ---- world "reskin" palette (terrain/foliage/water) ----
+      // terrainTint multiplies the instanced block colors (grass/sand/
+      // rock) directly - a near-white value leaves them untouched, a
+      // warm value makes the whole island glow golden.
+      terrainTint: new THREE.Color(0xffffff),
+      // foliageTint is blended INTO each tree/grass-tuft/rock's own base
+      // color (by sereneAmount below), rather than multiplied, so their
+      // natural color variety survives even at full blend.
+      foliageTint: new THREE.Color(0xffffff),
+      foliageGlow: new THREE.Color(0x000000), // added as emissive on foliage for a soft glow
+      waterDeep: new THREE.Color(0x0a3a4a),
+      waterShallow: new THREE.Color(0x6fd8d8),
+      sereneAmount: 0, // 0-1, how strongly foliageTint/foliageGlow are blended in
+      sunGlowScale: 60, // size of the soft additive sun-flare sprite
     },
     target: {
       sunColor: new THREE.Color(0xfff1c9), sunIntensity: 1.5,
       fogColor: new THREE.Color(0x0e1a12), fogDensity: 0.014, bloom: 1.1,
       skyTop: new THREE.Color(0x2f6fb0), skyHorizon: new THREE.Color(0xdfeeff), skyBottom: new THREE.Color(0x3a4a3a),
+      terrainTint: new THREE.Color(0xffffff),
+      foliageTint: new THREE.Color(0xffffff),
+      foliageGlow: new THREE.Color(0x000000),
+      waterDeep: new THREE.Color(0x0a3a4a),
+      waterShallow: new THREE.Color(0x6fd8d8),
+      sereneAmount: 0,
+      sunGlowScale: 60,
     },
     flicker: false,
   };
@@ -289,6 +390,10 @@ export function initVoxelWorld(canvas) {
     uDeepColor: { value: new THREE.Color(0x0a3a4a) },
     uShallowColor: { value: new THREE.Color(0x6fd8d8) },
     uCameraPos: { value: camera.position.clone() },
+    uSunDirection: { value: sun.position.clone().normalize() },
+    uSunColor: { value: new THREE.Color(0xfff1c9) },
+    uSkyTop: { value: new THREE.Color(0x2f6fb0) },
+    uSkyHorizon: { value: new THREE.Color(0xdfeeff) },
   };
   const water = new THREE.Mesh(
     new THREE.PlaneGeometry(GRID_SIZE * 3, GRID_SIZE * 3, 64, 64),
@@ -393,7 +498,11 @@ export function initVoxelWorld(canvas) {
 
   // ---- voxel island terrain (instanced) ----
   const blockGeo = new THREE.BoxGeometry(1, 1, 1);
-  const blockMat = new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0.05 });
+  const blockMat = new THREE.MeshStandardMaterial({
+    roughness: 0.85,
+    metalness: 0.05,
+    map: makeBlockNoiseTexture(), // multiplies with each instance's color for a real pixel-grain look
+  });
 
   const positions = [];
   const heightMap = new Map(); // (x,z) -> topmost solid height, reused below for decoration placement
@@ -572,19 +681,52 @@ export function initVoxelWorld(canvas) {
   // ---- decoration pass: trees, rocks, grass tufts ----
   const decorationGroup = new THREE.Group();
 
+  const leafTex = makeLeafTexture();
+  const rockNoiseTex = makeBlockNoiseTexture();
+
   const trunkGeo = new THREE.CylinderGeometry(0.12, 0.18, 1.2, 6);
   const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5c4433, roughness: 1 });
-  const canopyGeo = new THREE.IcosahedronGeometry(0.85, 1);
-  const canopyMats = [0x3f7a3f, 0x4a8a45, 0x356f38, 0x548f4f, 0x3d7550].map(
-    (c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.92, flatShading: true })
+  // Real cube "leaf blocks" (not smooth blobs) with a punched-through
+  // alpha cutout texture - this is what makes the canopy actually read
+  // as leaves, with real gaps of daylight/sky visible through it, the
+  // same way Minecraft's own leaf blocks work.
+  const canopyGeo = new THREE.BoxGeometry(0.85, 0.85, 0.85);
+  // Base colors kept around so the per-frame mood tint can blend INTO
+  // them (preserving each material's natural hue variety) instead of
+  // replacing them outright.
+  const canopyBaseColors = [0x3f7a3f, 0x4a8a45, 0x356f38, 0x548f4f, 0x3d7550].map(
+    (c) => new THREE.Color(c)
+  );
+  const canopyMats = canopyBaseColors.map(
+    (c) =>
+      new THREE.MeshStandardMaterial({
+        color: c.clone(),
+        map: leafTex,
+        alphaTest: 0.5,
+        side: THREE.DoubleSide, // so the punched-through gaps don't show black backfaces
+        roughness: 0.92,
+        emissive: 0x000000,
+      })
   );
 
   const rockGeo = new THREE.IcosahedronGeometry(0.4, 0);
-  const rockMat = new THREE.MeshStandardMaterial({ color: 0x8a8d92, roughness: 0.95, flatShading: true });
+  const rockBaseColor = new THREE.Color(0x8a8d92);
+  const rockMat = new THREE.MeshStandardMaterial({
+    color: rockBaseColor.clone(),
+    map: rockNoiseTex,
+    roughness: 0.95,
+    flatShading: true,
+  });
 
   const tuftGeo = new THREE.PlaneGeometry(0.6, 0.5);
+  const tuftBaseColor = new THREE.Color(0x6bb552);
   const tuftMat = new THREE.MeshStandardMaterial({
-    color: 0x6bb552, roughness: 1, side: THREE.DoubleSide, transparent: true, alphaTest: 0.4,
+    color: tuftBaseColor.clone(),
+    map: leafTex,
+    roughness: 1,
+    side: THREE.DoubleSide,
+    transparent: true,
+    alphaTest: 0.4,
   });
 
   heightMap.forEach((info, keyStr) => {
@@ -609,18 +751,37 @@ export function initVoxelWorld(canvas) {
       tree.add(trunk);
 
       const mat = canopyMats[Math.floor(hash2(x + 2, z + 2) * canopyMats.length) % canopyMats.length];
-      const clusterCount = 3;
-      for (let i = 0; i < clusterCount; i++) {
-        const blob = new THREE.Mesh(canopyGeo, mat);
-        const jx = (hash2(x + i, z - i) - 0.5) * 0.8;
-        const jz = (hash2(x - i, z + i) - 0.5) * 0.8;
-        const jy = h + 1.25 + hash2(x + i * 3, z) * 0.7;
-        blob.position.set(jx, jy, jz);
-        blob.scale.setScalar(0.6 + hash2(i, x + z) * 0.5);
-        blob.rotation.y = hash2(x * (i + 1), z) * Math.PI;
-        blob.castShadow = true;
-        tree.add(blob);
+
+      // Canopy is built as several stacked "rings" of blobs arranged in
+      // a rough circle around the trunk, rather than one loose cluster -
+      // this is what makes it read as a tall, dense, near-solid green
+      // column (like a real shader-pack tree) instead of a small round
+      // puff sitting on top of a stick.
+      const CANOPY_LEVELS = 5;
+      const BLOBS_PER_LEVEL = 3;
+      for (let lvl = 0; lvl < CANOPY_LEVELS; lvl++) {
+        const levelT = lvl / (CANOPY_LEVELS - 1); // 0 at base, 1 at top
+        const levelY = h + 0.9 + lvl * 0.62;
+        const levelRadius = 0.55 * (1 - levelT * 0.35); // gentle taper toward the top
+        for (let i = 0; i < BLOBS_PER_LEVEL; i++) {
+          const angle =
+            (i / BLOBS_PER_LEVEL) * Math.PI * 2 + hash2(x + lvl, z + i) * 1.8;
+          const jx = Math.cos(angle) * levelRadius;
+          const jz = Math.sin(angle) * levelRadius;
+          const blob = new THREE.Mesh(canopyGeo, mat);
+          blob.position.set(jx, levelY + (hash2(x + i, z + lvl) - 0.5) * 0.25, jz);
+          blob.scale.setScalar(0.62 + hash2(lvl, x + z + i) * 0.35);
+          blob.rotation.y = hash2(x * (i + 1), z + lvl) * Math.PI;
+          blob.castShadow = true;
+          tree.add(blob);
+        }
       }
+      // One extra blob capping the very top, closing off the column.
+      const topBlob = new THREE.Mesh(canopyGeo, mat);
+      topBlob.position.set(0, h + 0.9 + CANOPY_LEVELS * 0.62, 0);
+      topBlob.scale.setScalar(0.55 + hash2(x + 5, z + 5) * 0.2);
+      topBlob.castShadow = true;
+      tree.add(topBlob);
 
       const scale = 0.8 + hash2(x + 1, z + 1) * 0.6;
       tree.scale.setScalar(scale);
@@ -681,15 +842,25 @@ export function initVoxelWorld(canvas) {
 
   function setMood(zone, stabilityValue = 60) {
     if (zone === "stable") {
-      mood.target.sunColor.set(0xfff1c9);
-      mood.target.sunIntensity = 1.6;
+      mood.target.sunColor.set(0xfff8e0);
+      mood.target.sunIntensity = 1.75;
       mood.target.fogColor.set(0x1a2a1c);
-      mood.target.fogDensity = 0.01;
-      mood.target.bloom = 1.2;
-      mood.target.skyTop.set(0x2f6fb0);
-      mood.target.skyHorizon.set(0xdfeeff);
-      mood.target.skyBottom.set(0x3a4a3a);
+      mood.target.fogDensity = 0.008;
+      mood.target.bloom = 1.4;
+      mood.target.skyTop.set(0x3f8fd8);
+      mood.target.skyHorizon.set(0xeaf6ff);
+      mood.target.skyBottom.set(0x4a5a48);
       mood.flicker = false;
+      // A stabilized world doesn't just get brighter - it reskins:
+      // crisp bright daylight, vivid saturated foliage, and glassy
+      // reflective water with a real sun glint (see waterFragment).
+      mood.target.terrainTint.set(0xf5ffe8);
+      mood.target.foliageTint.set(0x52d648);
+      mood.target.foliageGlow.set(0x142e12);
+      mood.target.waterDeep.set(0x0a5a68);
+      mood.target.waterShallow.set(0x8ff5e6);
+      mood.target.sereneAmount = 1;
+      mood.target.sunGlowScale = 95;
     } else if (zone === "unstable") {
       mood.target.sunColor.set(0xd8c9a8);
       mood.target.sunIntensity = 1.05;
@@ -700,6 +871,15 @@ export function initVoxelWorld(canvas) {
       mood.target.skyHorizon.set(0x9aa3ad);
       mood.target.skyBottom.set(0x2a2f33);
       mood.flicker = false;
+      // Roughly the island's natural, everyday coloring - a faint
+      // dusty wash, nothing glowing yet.
+      mood.target.terrainTint.set(0xeceae0);
+      mood.target.foliageTint.set(0xc9c4b0);
+      mood.target.foliageGlow.set(0x000000);
+      mood.target.waterDeep.set(0x0a3a4a);
+      mood.target.waterShallow.set(0x6fd8d8);
+      mood.target.sereneAmount = 0.15;
+      mood.target.sunGlowScale = 60;
     } else {
       mood.target.sunColor.set(0xff6a4a);
       mood.target.sunIntensity = 0.7;
@@ -710,6 +890,15 @@ export function initVoxelWorld(canvas) {
       mood.target.skyHorizon.set(0x8a3018);
       mood.target.skyBottom.set(0x150606);
       mood.flicker = true;
+      // Chaotic: everything reads as scorched/charred rather than lush -
+      // rusty terrain, ember-glowing foliage, blood-warm water.
+      mood.target.terrainTint.set(0xd98a72);
+      mood.target.foliageTint.set(0x8a3a2a);
+      mood.target.foliageGlow.set(0x2a0a05);
+      mood.target.waterDeep.set(0x2a0d0d);
+      mood.target.waterShallow.set(0x8a3a3a);
+      mood.target.sereneAmount = 0.6;
+      mood.target.sunGlowScale = 50;
     }
   }
 
@@ -739,6 +928,34 @@ export function initVoxelWorld(canvas) {
     mood.current.skyTop.lerp(mood.target.skyTop, lerpAmt);
     mood.current.skyHorizon.lerp(mood.target.skyHorizon, lerpAmt);
     mood.current.skyBottom.lerp(mood.target.skyBottom, lerpAmt);
+    mood.current.terrainTint.lerp(mood.target.terrainTint, lerpAmt);
+    mood.current.foliageTint.lerp(mood.target.foliageTint, lerpAmt);
+    mood.current.foliageGlow.lerp(mood.target.foliageGlow, lerpAmt);
+    mood.current.waterDeep.lerp(mood.target.waterDeep, lerpAmt);
+    mood.current.waterShallow.lerp(mood.target.waterShallow, lerpAmt);
+    mood.current.sereneAmount += (mood.target.sereneAmount - mood.current.sereneAmount) * lerpAmt;
+    mood.current.sunGlowScale += (mood.target.sunGlowScale - mood.current.sunGlowScale) * lerpAmt;
+    sunGlow.scale.set(mood.current.sunGlowScale, mood.current.sunGlowScale, 1);
+
+    // ---- reskin the world to match the current mood ----
+    // Terrain: a straight multiply tint over the instanced blocks'
+    // existing per-vertex colors (grass/sand/rock), so the whole island
+    // can glow warm without needing to touch per-instance data.
+    blockMat.color.copy(mood.current.terrainTint);
+    // Foliage & rock: blend the mood tint INTO each material's own base
+    // color (by sereneAmount) rather than replacing it, so trees/grass/
+    // rocks keep their natural variety even at full serenity.
+    rockMat.color.copy(rockBaseColor).lerp(mood.current.foliageTint, mood.current.sereneAmount * 0.5);
+    tuftMat.color.copy(tuftBaseColor).lerp(mood.current.foliageTint, mood.current.sereneAmount);
+    canopyMats.forEach((mat, i) => {
+      mat.color.copy(canopyBaseColors[i]).lerp(mood.current.foliageTint, mood.current.sereneAmount);
+      mat.emissive.copy(mood.current.foliageGlow);
+    });
+    waterUniforms.uDeepColor.value.copy(mood.current.waterDeep);
+    waterUniforms.uShallowColor.value.copy(mood.current.waterShallow);
+    waterUniforms.uSunColor.value.copy(mood.current.sunColor);
+    waterUniforms.uSkyTop.value.copy(mood.current.skyTop);
+    waterUniforms.uSkyHorizon.value.copy(mood.current.skyHorizon);
 
     skyMesh.position.copy(camera.position); // keep the dome centered on the player at all times
 
@@ -754,7 +971,6 @@ export function initVoxelWorld(canvas) {
 
     waterUniforms.uTime.value = t;
     waterUniforms.uCameraPos.value.copy(camera.position);
-    waterUniforms.uShallowColor.value.set(mood.flicker ? 0x8a3a3a : 0x6fd8d8);
 
     updateSplashes(dt);
 
@@ -831,14 +1047,20 @@ export function initVoxelWorld(canvas) {
       disposed = true;
       window.removeEventListener("resize", resize);
       blockGeo.dispose();
+      blockMat.map.dispose();
       blockMat.dispose();
       skyGeo.dispose();
       skyMat.dispose();
       trunkGeo.dispose();
+      trunkMat.dispose();
       canopyGeo.dispose();
       canopyMats.forEach((m) => m.dispose());
+      leafTex.dispose();
       rockGeo.dispose();
+      rockMat.dispose();
+      rockNoiseTex.dispose();
       tuftGeo.dispose();
+      tuftMat.dispose();
       chestGeo.dispose();
       chestLidGeo.dispose();
       chestTrimGeo.dispose();

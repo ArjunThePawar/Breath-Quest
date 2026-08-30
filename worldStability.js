@@ -1,4 +1,3 @@
-
 // Manages the single most important stat in the game: WORLD STABILITY
 // (a number from 0 to 100). Calm breathing raises it, panicked/erratic breathing lowers it.
 // It also tracks which "zone" the world is currently in - stable,
@@ -66,6 +65,18 @@ export class WorldStability extends EventTarget {
 
     this._setValue(this._value + delta);
     return this._value;
+  }
+
+  // Public entry point for anything OUTSIDE the normal breath-driven tick
+  // that needs to jam stability to a specific number immediately (e.g. a
+  // "force chaotic" debug/panic button). Deliberately just forwards to
+  // the exact same _setValue() path applyBreathState() already uses, so
+  // clamping, zone recalculation, "stabilitychange"/"zonechange" events,
+  // and therefore the alarm/thunder reactions in gameLoop.js all fire
+  // exactly as they would from an organic stability drop - nothing about
+  // the normal mechanics is bypassed or duplicated.
+  forceValue(newValue) {
+    this._setValue(newValue);
   }
 
   // Internal helper: safely updates the stability value, clamps it within

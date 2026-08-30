@@ -113,4 +113,15 @@ export const CONFIG = {
   // starts to become noticeable at all - kept short on purpose so the
   // glow can't be used to spot it from across the island.
   TREASURE_GLOW_RADIUS: 4,
+
+  //  Scattered collectible settings (purely optional, purely for fun) 
+  // A handful of small glowing gems hidden around the island, unrelated
+  // to breathing/stability/win-fail in any way. Unlike the single big
+  // treasure above, these are visible and collectible from the moment
+  // a session starts - an always-available side-goal for anyone who'd
+  // rather wander and explore for a minute than watch the stability bar.
+  COLLECTIBLE_COUNT: 8,               // how many gems are scattered per session
+  COLLECTIBLE_FIND_RADIUS: 1.4,       // how close the player must walk to collect one
+  COLLECTIBLE_GLOW_RADIUS: 6,         // range at which a gem's shimmer starts to catch the eye
+  COLLECTIBLE_MIN_SPACING: 6,         // minimum distance kept between any two gems, so they don't cluster
 };

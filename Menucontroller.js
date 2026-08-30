@@ -362,6 +362,8 @@ export function initApp() {
   const pauseBanner = document.getElementById("pauseBanner");
   const lightningFlash = document.getElementById("lightningFlash");
   const inputModeEl = document.getElementById("inputModeValue");
+  const gemsFoundEl = document.getElementById("gemsFoundValue");
+  const gemsTotalEl = document.getElementById("gemsTotalValue");
 
   // Simulates pressing/releasing the B key that KeyboardBreathInput
   // already listens for - no changes needed to breathInput.js itself.
@@ -377,6 +379,25 @@ export function initApp() {
   });
   tapBreatheBtn.addEventListener("pointercancel", () => {
     window.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyB" }));
+  });
+
+  // Instant "panic" toggle - jams the world into the chaotic zone via
+  // GameEngine.toggleForceChaotic() (see gameLoop.js), and puts it back
+  // exactly as it was on a second press. This doesn't add any new
+  // mechanics: it goes through the exact same stability pipeline a real
+  // organic collapse/recovery would, so the alarm, lightning, thunder,
+  // and red stability bar all react exactly as normal.
+  //
+  // Deliberately hidden: no button, no HUD element, no visual hint of
+  // any kind - purely a keyboard shortcut (Ctrl+F), same pattern as the
+  // Escape-key pause handler below. preventDefault() stops the browser's
+  // own "Find in page" from opening. Only fires while a session is
+  // actually running (hud is active) and an engine exists.
+  window.addEventListener("keydown", (e) => {
+    if (!e.ctrlKey || e.code !== "KeyF") return;
+    if (!hudEl.classList.contains("active") || !activeEngine) return;
+    e.preventDefault();
+    activeEngine.toggleForceChaotic();
   });
 
   let zoneBannerTimeout = null;
@@ -450,6 +471,14 @@ export function initApp() {
       else if (mode === "keyboard") inputModeEl.textContent = "Keyboard (press B)";
       else inputModeEl.textContent = "Mic or Keyboard";
     },
+    // Purely cosmetic progress display for the scattered collectible
+    // gems - completely separate from stability/power/win/fail. Called
+    // once at session start (0/total) and again each time a gem is
+    // collected (see gamebootstrap.js's collectible-found handler).
+    updateGemProgress(foundCount, total) {
+      gemsFoundEl.textContent = foundCount;
+      gemsTotalEl.textContent = total;
+    },
   };
 
   async function beginPlay() {
@@ -473,6 +502,10 @@ export function initApp() {
     waterOverlayEl.style.opacity = 0;
     try {
       activeEngine = await startGame({ world, hud });
+      // Gems were freshly reset inside startGame() - reflect that as
+      // 0/total right away rather than waiting for the first "tick".
+      const { total } = world.getCollectibleProgress();
+      hud.updateGemProgress(0, total);
     } catch (err) {
       console.error("Failed to start game:", err);
       alert("Could not start the game (check console for details).");

@@ -110,6 +110,13 @@ export class GameEngine extends EventTarget {
     // single tick the world sits in the chaotic zone).
     this._hasFailed = false;
 
+    // ── Hidden "force chaotic" toggle tracking (Ctrl+F) ──
+    // null = not currently forced. Otherwise holds the stability value
+    // from the moment JUST BEFORE the world was forced chaotic, so a
+    // second press can put it back exactly where it was. See
+    // toggleForceChaotic() below.
+    this._forcedChaoticPrevValue = null;
+
     // Wire up every input source identically - each one can independently
     // report breath phases/cycles/classifications at any time, for the
     // whole session.
@@ -394,6 +401,39 @@ export class GameEngine extends EventTarget {
       // Power dropped below the threshold - reset the countdown, since
       // stabilizing requires CONTINUOUS max power, not just reaching it once.
       this._powerFullSince = null;
+    }
+  }
+
+  // Called from OUTSIDE the engine (via the hidden Ctrl+F shortcut in
+  // menuController.js) to instantly TOGGLE the world between the
+  // chaotic zone and whatever it was before. This does NOT introduce a
+  // second, separate "chaotic mode" - it just jams the stability value
+  // via WorldStability.forceValue(), which is the same _setValue() path
+  // the normal per-tick breath handling already uses. Every consequence
+  // of that (the "zonechange"/"stabilitychange" events, the alarm
+  // turning on/off, lightning + thunder starting/stopping, the HUD bar
+  // flashing red) fires through the exact same listeners as an organic
+  // collapse/recovery - nothing is short-circuited or duplicated.
+  //
+  // First press: remembers the CURRENT stability value, then forces
+  // stability down to STABILITY_CHAOTIC_THRESHOLD (not 0, so it can't
+  // also trip the separate, lower STABILITY_FAIL_THRESHOLD hard-failure
+  // check in _tick() - the world stays normal/RECOVERABLE chaotic, and
+  // the ordinary tick loop keeps running underneath exactly as usual).
+  // Second press: restores stability back to the value it had right
+  // before the first press, undoing the override.
+  //
+  // Ignored once the run has already ended.
+  toggleForceChaotic() {
+    if (this._hasWon || this._hasFailed) return;
+
+    if (this._forcedChaoticPrevValue === null) {
+      this._forcedChaoticPrevValue = this._stability.value;
+      this._stability.forceValue(CONFIG.STABILITY_CHAOTIC_THRESHOLD);
+    } else {
+      const restoreValue = this._forcedChaoticPrevValue;
+      this._forcedChaoticPrevValue = null;
+      this._stability.forceValue(restoreValue);
     }
   }
 

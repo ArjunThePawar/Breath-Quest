@@ -670,6 +670,138 @@ export function initVoxelWorld(canvas) {
     return { x: TREASURE_POS.x, y: TREASURE_POS.y, z: TREASURE_POS.z };
   }
 
+  // ---- scattered collectible gems (purely optional exploration reward) ----
+  // Small glowing gems hidden around the island, entirely separate from
+  // the single big treasure above: no gating behind stabilization, no
+  // effect on stability/power/win/fail, no handler required to work.
+  // They exist purely to give a curious player something pleasant to
+  // wander toward - an active, low-stakes goal alongside (not tied to)
+  // the breathing mechanic.
+  const collectibleCandidates = [];
+  heightMap.forEach((info, keyStr) => {
+    const [x, z] = keyStr.split(",").map(Number);
+    const { h, dist } = info;
+    const isGrass = h <= 4 && h >= 1 && dist < ISLAND_RADIUS * 0.6;
+    if (!isGrass) return;
+    // Keep them off the immediate spawn clearing and off the fence line,
+    // same reasoning as the tree/rock decoration pass above.
+    if (dist < ISLAND_RADIUS * 0.12) return;
+    const nearFence = Math.abs(dist - ACCESS_RADIUS) < 1.2;
+    if (nearFence) return;
+    collectibleCandidates.push({ x, z, h });
+  });
+
+  // Picks COLLECTIBLE_COUNT candidate cells with simple rejection
+  // sampling so gems land spread out across the island rather than
+  // clumping together by chance. Falls back to whatever it managed to
+  // place if the island doesn't have enough well-spaced room (should
+  // never actually happen at these island sizes).
+  function pickCollectiblePositions(count) {
+    const chosen = [];
+    const pool = collectibleCandidates.slice();
+    let attempts = 0;
+    const maxAttempts = count * 40;
+
+    while (chosen.length < count && pool.length > 0 && attempts < maxAttempts) {
+      attempts++;
+      const idx = Math.floor(Math.random() * pool.length);
+      const candidate = pool[idx];
+      const farEnough = chosen.every((c) => {
+        const dx = c.x - candidate.x, dz = c.z - candidate.z;
+        return Math.sqrt(dx * dx + dz * dz) >= CONFIG.COLLECTIBLE_MIN_SPACING;
+      });
+      if (farEnough) {
+        chosen.push(candidate);
+        pool.splice(idx, 1);
+      }
+    }
+    return chosen;
+  }
+
+  const gemGeo = new THREE.OctahedronGeometry(0.22, 0);
+  const gemMat = new THREE.MeshStandardMaterial({
+    color: 0x6fe6ff,
+    emissive: 0x2a8fa8,
+    emissiveIntensity: 0.9,
+    roughness: 0.25,
+    metalness: 0.3,
+  });
+  const gemGlowTex = makeGlowTexture();
+
+  const collectibleGroup = new THREE.Group();
+  let collectibles = []; // { mesh, glow, basePos, found, bobPhase }
+
+  // Builds the full set of gems fresh: rolls new positions, creates the
+  // meshes/glow sprites, and adds them to the scene. Torn down first by
+  // clearCollectibles() so this is always safe to call again for a new
+  // session.
+  function buildCollectibles() {
+    const cells = pickCollectiblePositions(CONFIG.COLLECTIBLE_COUNT);
+    collectibles = cells.map((cell, i) => {
+      const mesh = new THREE.Mesh(gemGeo, gemMat);
+      mesh.position.set(cell.x, cell.h + 0.9, cell.z);
+      mesh.castShadow = true;
+      collectibleGroup.add(mesh);
+
+      const glow = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          map: gemGlowTex,
+          color: 0x9cf3ff,
+          transparent: true,
+          depthWrite: false,
+          opacity: 0.15,
+          blending: THREE.AdditiveBlending,
+        })
+      );
+      glow.scale.set(0.9, 0.9, 1);
+      glow.position.copy(mesh.position);
+      collectibleGroup.add(glow);
+
+      return {
+        mesh,
+        glow,
+        basePos: mesh.position.clone(),
+        found: false,
+        bobPhase: hash2(cell.x, cell.z) * Math.PI * 2,
+      };
+    });
+  }
+
+  // Removes every currently-placed gem from the scene, so a fresh call
+  // to buildCollectibles() doesn't leave old meshes floating around.
+  function clearCollectibles() {
+    collectibles.forEach((c) => {
+      collectibleGroup.remove(c.mesh);
+      collectibleGroup.remove(c.glow);
+    });
+    collectibles = [];
+  }
+
+  scene.add(collectibleGroup);
+  buildCollectibles();
+
+  let collectibleFoundHandler = null;
+
+  // Registers the function to call the instant a gem is collected.
+  // Called with ({ foundCount, total }) so the HUD can show live
+  // progress without the caller needing to track counts itself.
+  function setCollectibleFoundHandler(fn) {
+    collectibleFoundHandler = fn;
+  }
+
+  // Rerolls a brand new set of gems (fresh positions, all uncollected).
+  // Call this whenever a new session/run begins, same as resetTreasure().
+  function resetCollectibles() {
+    clearCollectibles();
+    buildCollectibles();
+  }
+
+  function getCollectibleProgress() {
+    const total = collectibles.length;
+    const foundCount = collectibles.filter((c) => c.found).length;
+    return { foundCount, total };
+  }
+
   function isTreasureUnlocked() {
     return treasureUnlocked;
   }
@@ -1002,6 +1134,38 @@ export function initVoxelWorld(canvas) {
       }
     }
 
+    // ---- scattered collectible gems ----
+    // Entirely independent of the treasure hunt/stability above - always
+    // active, always visible, no unlock step. Each gem just bobs/spins
+    // gently and gets checked against player distance every frame.
+    for (const gem of collectibles) {
+      if (gem.found) continue;
+
+      gem.bobPhase += dt * 1.8;
+      gem.mesh.position.y = gem.basePos.y + Math.sin(gem.bobPhase) * 0.12;
+      gem.mesh.rotation.y += dt * 1.1;
+      gem.glow.position.y = gem.mesh.position.y;
+
+      const dx = camera.position.x - gem.mesh.position.x;
+      const dz = camera.position.z - gem.mesh.position.z;
+      const distToGem = Math.sqrt(dx * dx + dz * dz);
+
+      // Gentle shimmer that only really picks up once the player is
+      // already fairly close - rewards noticing it while exploring,
+      // rather than acting as a beacon visible from across the island.
+      const proximity = Math.max(0, 1 - distToGem / CONFIG.COLLECTIBLE_GLOW_RADIUS);
+      gem.glow.material.opacity = 0.15 + proximity * 0.55;
+
+      if (distToGem <= CONFIG.COLLECTIBLE_FIND_RADIUS) {
+        gem.found = true;
+        collectibleGroup.remove(gem.mesh);
+        collectibleGroup.remove(gem.glow);
+        if (collectibleFoundHandler) {
+          collectibleFoundHandler(getCollectibleProgress());
+        }
+      }
+    }
+
     cloudGroup.children.forEach((c) => {
       c.position.x += c.userData.speed * dt;
       if (c.position.x > CENTER + 100) c.position.x = CENTER - 100;
@@ -1043,6 +1207,10 @@ export function initVoxelWorld(canvas) {
     getTreasurePosition,
     isTreasureUnlocked,
     isTreasureFound,
+    // ---- scattered collectible gems API ----
+    setCollectibleFoundHandler,
+    resetCollectibles,
+    getCollectibleProgress,
     dispose() {
       disposed = true;
       window.removeEventListener("resize", resize);
@@ -1071,6 +1239,10 @@ export function initVoxelWorld(canvas) {
       splashTex.dispose();
       splashPool.forEach((s) => s.material.dispose());
       activeSplashes.forEach((s) => s.material.dispose());
+      gemGeo.dispose();
+      gemMat.dispose();
+      gemGlowTex.dispose();
+      collectibles.forEach((c) => c.glow.material.dispose());
       renderer.dispose();
     },
   };

@@ -45,6 +45,16 @@ export async function startGame({ world, hud, onWin }) {
   // session is hidden and reset before this one starts.
   world.resetTreasure();
 
+  // Fresh run: reroll the scattered collectible gems too, so a previous
+  // session's collected gems don't carry over. Entirely independent of
+  // the breathing/stability engine above - this is just a side-goal for
+  // anyone who wants to explore, wired straight to the HUD.
+  world.resetCollectibles();
+  world.setCollectibleFoundHandler(({ foundCount, total }) => {
+    hud.updateGemProgress(foundCount, total);
+    hud.flashInputMessage(`Found a hidden gem! (${foundCount}/${total})`);
+  });
+
   // The world detects the player's proximity to the (unlocked) treasure
   // entirely on its own each frame - all it needs from us is something
   // to call the instant that happens, which forwards the news to the

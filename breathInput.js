@@ -128,9 +128,10 @@ export class KeyboardBreathInput extends BreathInputSource {
 // Microphone input (real breathing detection)
 // Uses the Web Audio API to listen to the microphone and classify
 // breathing DIRECTLY from how much the volume changes moment to moment,
-// relative to the loudest volume this mic has picked up so far:
-//   - a volume swing that's a large fraction (3/4 by default) of the
-//     loudest sound heard so far this session -> panicked
+// relative to the loudest volume this mic has picked up RECENTLY (see
+// _maxAmplitude decay below):
+//   - a volume swing that's a large fraction (1/2 by default) of the
+//     loudest sound heard recently -> panicked
 //   - anything smaller -> calm
 // No cycle timing, no sustained-peak detection, no filtering.
 export class MicBreathInput extends BreathInputSource {
@@ -149,15 +150,24 @@ export class MicBreathInput extends BreathInputSource {
     this._fastAmplitude = 0;
     this._slowAmplitude = 0;
 
-    // The loudest volume this mic has picked up so far THIS SESSION -
-    // our live stand-in for "the max volume input possible". There's no
-    // fixed hardware ceiling real breathing/voice ever actually reaches,
-    // so a hardcoded absolute number would either be unreachable (too
+    // The loudest volume this mic has picked up RECENTLY - our live
+    // stand-in for "the max volume input possible". There's no fixed
+    // hardware ceiling real breathing/voice ever actually reaches, so a
+    // hardcoded absolute number would either be unreachable (too
     // strict) or trivially exceeded (too loose) depending on the room
-    // and mic gain. Tracking the actual observed peak makes the panic
-    // threshold self-calibrating to whoever is playing. Starts at a
-    // small nonzero floor so early frames (before any real peak has
-    // been seen yet) aren't compared against ~0.
+    // and mic gain. Tracking the observed peak makes the panic
+    // threshold self-calibrating to whoever is playing.
+    //
+    // IMPORTANT: this value used to only ever increase, which meant one
+    // genuinely loud breath early in a session would permanently raise
+    // the bar for "panicked" for the rest of the run - eventually
+    // making panicked nearly impossible to trigger again, no matter how
+    // hard someone breathed. It now slowly DECAYS back down when it
+    // isn't being challenged (see _loop()), so the threshold stays
+    // calibrated to how loud things have been recently, not to a single
+    // spike from minutes ago. Starts at a small nonzero floor so early
+    // frames (before any real peak has been seen yet) aren't compared
+    // against ~0.
     this._maxAmplitude = CONFIG.MIC_MAX_AMPLITUDE_FLOOR;
   }
 
@@ -207,12 +217,13 @@ export class MicBreathInput extends BreathInputSource {
   //   - slow average: drifts along with the recent overall level,
   //     barely reacting to any single moment
   // The gap between them is the "change in volume". That gets compared
-  // against a threshold that is ITSELF a fraction (3/4 by default) of
-  // the loudest volume this mic has picked up so far this session -
-  // i.e. "panicked" means a volume swing that's a large portion of as
-  // loud as this mic/room has gotten, not an arbitrary fixed number.
-  //   - change >= 3/4 of session peak -> "panicked"
-  //   - change <  3/4 of session peak -> "calm"
+  // against a threshold that is ITSELF a fraction (1/2 by default) of
+  // the loudest volume this mic has picked up RECENTLY - i.e. "panicked"
+  // means a volume swing that's a large portion of as loud as this
+  // mic/room has gotten lately, not an arbitrary fixed number, and not
+  // a peak from several minutes ago that's no longer representative.
+  //   - change >= 1/2 of recent peak -> "panicked"
+  //   - change <  1/2 of recent peak -> "calm"
   _loop() {
     const rawAmplitude = this._getNormalizedAmplitude();
     const now = performance.now();
@@ -220,11 +231,21 @@ export class MicBreathInput extends BreathInputSource {
     this._fastAmplitude = this._fastAmplitude * 0.6 + rawAmplitude * 0.4;
     this._slowAmplitude = this._slowAmplitude * 0.95 + rawAmplitude * 0.05;
 
-    // Keep track of the loudest moment seen so far this session - this
-    // never decreases, so once a genuinely loud breath happens, it
-    // permanently calibrates what "loud" means for the rest of the run.
+    // Keep track of the loudest RECENT moment, not the loudest ever this
+    // session. If the current fast amplitude actually beats the stored
+    // max, that becomes the new max immediately (no delay in recognizing
+    // a genuinely loud breath). Otherwise, let the max slowly decay back
+    // toward the floor - this is what prevents one loud spike early on
+    // from permanently raising the panic threshold for the rest of the
+    // run. MIC_MAX_AMPLITUDE_DECAY is close to (but under) 1, so this
+    // relaxation happens gradually over several seconds, not instantly.
     if (this._fastAmplitude > this._maxAmplitude) {
       this._maxAmplitude = this._fastAmplitude;
+    } else {
+      this._maxAmplitude = Math.max(
+        CONFIG.MIC_MAX_AMPLITUDE_FLOOR,
+        this._maxAmplitude * CONFIG.MIC_MAX_AMPLITUDE_DECAY
+      );
     }
 
     const volumeChange = Math.abs(this._fastAmplitude - this._slowAmplitude);

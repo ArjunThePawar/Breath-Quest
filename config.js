@@ -70,12 +70,19 @@ export const CONFIG = {
   MIC_MAX_AMPLITUDE_FLOOR: 0.15,    // starting/minimum value for "the loudest volume seen so far" -
                                      // without this, the very first few frames of a session (before any
                                      // real peak has occurred) would be compared against ~0
-  MIC_PANIC_VOLUME_FRACTION: 0.75,  // "panicked" triggers once a volume change reaches this fraction
+  MIC_PANIC_VOLUME_FRACTION: 0.5,   // "panicked" triggers once a volume change reaches this fraction
                                      // of the loudest volume this mic has picked up so far this session
-                                     // (3/4 by default) - a change SMALLER than this fraction is "calm".
-                                     // Lower this to make panicked easier to trigger (a smaller swing,
-                                     // relative to the loudest moment so far, counts as panicked);
+                                     // (was 0.75 — lowered to HALF, so panicked triggers more easily,
+                                     // on a smaller volume swing relative to the loudest moment so far).
+                                     // Lower this further to make panicked even easier to trigger;
                                      // raise it to require a sharper, more extreme swing.
+  MIC_MAX_AMPLITUDE_DECAY: 0.997,    // per-frame decay applied to "loudest volume seen recently" when
+                                     // it isn't being challenged - without this, one loud breath early
+                                     // in a session permanently raises the panic threshold for the rest
+                                     // of the run, eventually making panicked impossible to trigger
+                                     // again. ~0.997 means it takes several seconds to meaningfully
+                                     // relax back down - move closer to 1 for slower decay (more
+                                     // session memory), closer to 0.99 for faster decay.
   // NOTE: there used to be a MIC_FALLBACK_TIMEOUT_MS here that switched
   // from mic to keyboard input after a period of silence. That's no
   // longer needed - both input methods now run simultaneously from the
@@ -87,6 +94,21 @@ export const CONFIG = {
   ALARM_VOLUME: 0.15,        // volume of the alarm tone (0 = silent, 1 = full volume)
 
   //  Win condition settings 
-  WIN_POWER_THRESHOLD: 100,     // power must reach this value to start the win timer
-  WIN_HOLD_DURATION_MS: 10000,  // power must STAY at/above the threshold for this long to win
+  // Reaching and HOLDING max power no longer wins the game outright -
+  // it "stabilizes" the world and unlocks the treasure hunt below.
+  // Actually winning now requires physically finding that treasure.
+  WIN_POWER_THRESHOLD: 100,     // power must reach this value to start the stabilization timer
+  WIN_HOLD_DURATION_MS: 10000,  // power must STAY at/above the threshold for this long to stabilize the world
+
+  //  Treasure hunt settings 
+  // Once the world stabilizes (see above), a treasure is revealed
+  // somewhere on the island - hidden among the existing trees/rocks
+  // rather than sitting out in the open. This is how close (in world
+  // units) the player has to physically walk up to it before it counts
+  // as "found" and the game is actually won.
+  TREASURE_FIND_RADIUS: 2.2,
+  // How close the player needs to be before the treasure's faint glow
+  // starts to become noticeable at all - kept short on purpose so the
+  // glow can't be used to spot it from across the island.
+  TREASURE_GLOW_RADIUS: 4,
 };

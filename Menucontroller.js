@@ -28,6 +28,12 @@ export function initApp() {
   world.setOrbiting(true);
   world.setMood("stable");
 
+  // Reference to whichever GameEngine is currently running, so a fresh
+  // beginPlay() can cleanly stop a leftover one from a previous run
+  // (see beginPlay below) instead of leaving old input listeners and
+  // ticks running underneath the new session.
+  let activeEngine = null;
+
   let settings = loadSettings();
   applySettingsToConfig(settings);
   world.setBrightness(settings.brightness);
@@ -245,6 +251,8 @@ export function initApp() {
   const winBanner = document.getElementById("winBanner");
   const winBannerText = document.getElementById("winBannerText");
   const failBanner = document.getElementById("failBanner");
+  const failBannerText = document.getElementById("failBannerText");
+  const pauseBanner = document.getElementById("pauseBanner");
   const lightningFlash = document.getElementById("lightningFlash");
   const inputModeEl = document.getElementById("inputModeValue");
 
@@ -283,11 +291,23 @@ export function initApp() {
       }
     },
     showWin(heldDurationMs) {
-      winBannerText.textContent = `Held maximum power for ${(heldDurationMs / 1000).toFixed(1)}s`;
+      winBannerText.textContent = `Stabilized the world and found the treasure! (held maximum power for ${(heldDurationMs / 1000).toFixed(1)}s)`;
       winBanner.classList.add("show");
+      // The persistent "go find the treasure" hint is no longer useful
+      // once it's actually been found.
+      clearTimeout(inputBannerTimeout);
+      inputBanner.classList.remove("show");
     },
-    showFail() {
+    showFail(reason) {
+      failBannerText.textContent =
+        reason === "treasure-hunt-broken"
+          ? "You failed to maintain a calm breathing stage while finding the treasure. Do it all over again."
+          : "You failed to meditate properly. Your world collapsed.";
       failBanner.classList.add("show");
+      // The persistent "go find the treasure, stay calm" hint is no
+      // longer relevant once the run has ended.
+      clearTimeout(inputBannerTimeout);
+      inputBanner.classList.remove("show");
     },
     flashLightning() {
       // Restart the CSS animation even if a previous flash is still
@@ -308,26 +328,37 @@ export function initApp() {
   };
 
   async function beginPlay() {
+    // A leftover engine from a previous run (e.g. pressing "Try Again"
+    // after a fail) would otherwise keep its own tick loop and input
+    // listeners running underneath this new one - stop it cleanly first.
+    if (activeEngine) {
+      activeEngine.stop();
+      activeEngine = null;
+    }
+
     showScreen(null);
     hudEl.classList.add("active");
     world.setOrbiting(false);
     player.enable();
     winBanner.classList.remove("show");
     failBanner.classList.remove("show");
+    pauseBanner.classList.remove("show");
     borderWarningEl.classList.remove("show");
     inputBanner.classList.remove("show");
     waterOverlayEl.style.opacity = 0;
     try {
-      await startGame({ world, hud });
+      activeEngine = await startGame({ world, hud });
     } catch (err) {
       console.error("Failed to start game:", err);
       alert("Could not start the game (check console for details).");
+      activeEngine = null;
       returnToMenu();
     }
   }
 
   function returnToMenu() {
     hudEl.classList.remove("active");
+    pauseBanner.classList.remove("show");
     player.disable();
     world.setOrbiting(true);
     world.setMood("stable");
@@ -347,10 +378,79 @@ export function initApp() {
     beginPlay();
   });
 
+  document.getElementById("failMainMenuBtn").addEventListener("click", () => {
+    // Same situation as tryAgainBtn - the engine has already stopped
+    // itself by the time the fail screen shows, but clear our reference
+    // defensively before heading back to the menu.
+    failBanner.classList.remove("show");
+    if (activeEngine) {
+      activeEngine.stop();
+      activeEngine = null;
+    }
+    returnToMenu();
+  });
+
   document.getElementById("escToMenuBtn").addEventListener("click", () => {
-    // Note: this does not stop the running GameEngine (no exposed handle
-    // here) — for a full "pause/quit" flow, have gameBootstrap.startGame
-    // return the engine instance and call engine.stop() before this.
+    if (activeEngine) {
+      activeEngine.stop();
+      activeEngine = null;
+    }
+    returnToMenu();
+  });
+
+  // ================= PAUSE MENU (Escape) =================
+  // Only meaningful mid-session: gameplay must be active, and neither
+  // the win nor fail banner (which already have their own "what next"
+  // buttons) can be showing.
+  function canTogglePause() {
+    return (
+      hudEl.classList.contains("active") &&
+      !winBanner.classList.contains("show") &&
+      !failBanner.classList.contains("show")
+    );
+  }
+
+  function openPauseMenu() {
+    if (!canTogglePause() || pauseBanner.classList.contains("show")) return;
+    if (activeEngine) activeEngine.pause();
+    player.pause();
+    pauseBanner.classList.add("show");
+  }
+
+  function closePauseMenu() {
+    if (!pauseBanner.classList.contains("show")) return;
+    pauseBanner.classList.remove("show");
+    player.resume();
+    if (activeEngine) activeEngine.resume();
+  }
+
+  window.addEventListener("keydown", (e) => {
+    if (e.code !== "Escape" || !canTogglePause()) return;
+    if (pauseBanner.classList.contains("show")) {
+      closePauseMenu();
+    } else {
+      openPauseMenu();
+    }
+  });
+
+  document.getElementById("pauseContinueBtn").addEventListener("click", () => {
+    closePauseMenu();
+  });
+
+  document.getElementById("pauseRestartBtn").addEventListener("click", () => {
+    // beginPlay() stops the current engine and re-enables the player
+    // itself, so there's no need to call player.resume()/engine.resume()
+    // on the way out - it's a full fresh run, not an un-pause.
+    pauseBanner.classList.remove("show");
+    beginPlay();
+  });
+
+  document.getElementById("pauseMainMenuBtn").addEventListener("click", () => {
+    pauseBanner.classList.remove("show");
+    if (activeEngine) {
+      activeEngine.stop();
+      activeEngine = null;
+    }
     returnToMenu();
   });
 }

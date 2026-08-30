@@ -89,8 +89,20 @@ export class GameEngine extends EventTarget {
     // Handle for the setInterval loop, so we can stop it later.
     this._tickHandle = null;
 
-    // ── Win condition tracking ──
+    // ── Stabilization tracking ──
+    // Reaching max power and holding it no longer wins the game by
+    // itself - it "stabilizes" the world (see _checkStabilization) and
+    // unlocks the hidden treasure hunt. _hasStabilized becomes true
+    // once, and stays true.
     this._powerFullSince = null; // timestamp when power FIRST reached max (resets if power drops)
+    this._hasStabilized = false;
+    this._stabilizedHeldDuration = 0; // heldDuration recorded at the moment stabilization happened
+
+    // ── Win condition tracking ──
+    // The actual "win" now only happens once the player has physically
+    // found the treasure that stabilizing the world unlocked (see
+    // notifyTreasureFound(), called from outside the engine once the
+    // renderer/world detects the player standing next to it).
     this._hasWon = false;        // becomes true once, and stays true (prevents re-firing "win")
 
     // ── Fail condition tracking ──
@@ -188,6 +200,13 @@ export class GameEngine extends EventTarget {
     const state = this._perInputState.get(input);
     state.classification = { state: e.detail.state, avgCycleMs: null, variance: null };
 
+    // TEMP DEBUG — remove once panicked detection is confirmed working end-to-end.
+    console.log(
+      `[classification] source=${input.name} state=${e.detail.state} ` +
+      `isActive=${input === this._activeInput} ` +
+      `activeInput=${this._activeInput ? this._activeInput.name : null}`
+    );
+
     if (input === this._activeInput) {
       this._latestClassification = state.classification;
     }
@@ -229,6 +248,42 @@ export class GameEngine extends EventTarget {
     this._thunder.dispose();
   }
 
+  // Freezes the game (used for the Escape pause menu) WITHOUT tearing
+  // anything down: only the periodic tick is paused, so nothing about
+  // stability/power/the breathing check gets re-evaluated while paused.
+  // Breath input sources are deliberately left running - if we stopped
+  // them here too, resuming would mean re-requesting mic access and
+  // would lose the player's last-known breathing rhythm for no reason.
+  // Also silences the alarm/thunder for the duration, since there's no
+  // reason for a storm to keep going while the player is looking at a
+  // menu.
+  pause() {
+    if (this._tickHandle) {
+      clearInterval(this._tickHandle);
+      this._tickHandle = null;
+    }
+    this._alarm.stop();
+    if (this._thunderTimeoutHandle) {
+      clearTimeout(this._thunderTimeoutHandle);
+      this._thunderTimeoutHandle = null;
+    }
+  }
+
+  // Reverses pause(): resumes the tick loop, and - if the world was
+  // still in the chaotic zone when paused - resumes the alarm/thunder
+  // too. Does nothing if the run has already ended (won or failed),
+  // since there's nothing left to resume.
+  resume() {
+    if (this._hasWon || this._hasFailed) return;
+    if (!this._tickHandle) {
+      this._tickHandle = setInterval(() => this._tick(), CONFIG.TICK_INTERVAL_MS);
+    }
+    if (this._stability.zone === "chaotic") {
+      this._alarm.start();
+      this._scheduleNextThunder();
+    }
+  }
+
   // Runs automatically every TICK_INTERVAL_MS. This is where stability,
   // power, and the win condition all get recalculated.
   _tick() {
@@ -247,6 +302,14 @@ export class GameEngine extends EventTarget {
         : this._latestClassification.state;
     this._effectiveState = effectiveState;
 
+    // TEMP DEBUG — remove once panicked detection is confirmed working end-to-end.
+    console.log(
+      `[tick] effectiveState=${effectiveState} ` +
+      `latestClassification=${this._latestClassification.state} ` +
+      `activeInput=${this._activeInput ? this._activeInput.name : null} ` +
+      `timeSinceLastBreath=${Math.round(timeSinceLastBreath)}ms`
+    );
+
     // Update stability based on the current breathing state. "idle"
     // gently drains stability instead of granting anything (see
     // worldStability.js), so no breathing = no progress toward winning.
@@ -255,8 +318,23 @@ export class GameEngine extends EventTarget {
     // Update power based on the newly updated stability.
     const power = this._player.updateFromStability(stabilityValue);
 
-    // Check whether the player has now met the win condition.
-    this._checkWinCondition(power);
+    // Check whether the player has now stabilized the world (this
+    // unlocks the treasure hunt - it does NOT win the game by itself).
+    this._checkStabilization(power);
+
+    // Once the world has been stabilized and the treasure hunt is on,
+    // the player has to keep breathing CALMLY - not just "moderate" or
+    // anything else - for the ENTIRE hunt, not just the original
+    // stabilization hold. Slipping out of "calm" even briefly (including
+    // going idle) ends the run immediately; there's no partial credit,
+    // and no resuming - the whole game has to be started over.
+    if (!this._hasFailed && !this._hasWon && this._hasStabilized && effectiveState !== "calm") {
+      this._hasFailed = true;
+      this.stop();
+      this.dispatchEvent(
+        new CustomEvent("fail", { detail: { reason: "treasure-hunt-broken", stability: stabilityValue } })
+      );
+    }
 
     // Hard failure: stability collapsing all the way down to
     // STABILITY_FAIL_THRESHOLD means the player failed to meditate/calm
@@ -299,10 +377,13 @@ export class GameEngine extends EventTarget {
     }, delayMs);
   }
 
-  // Determines whether the player has won: power must reach WIN_POWER_THRESHOLD
-  // and STAY there continuously for WIN_HOLD_DURATION_MS.
-  _checkWinCondition(power) {
-    if (this._hasWon) return; // already won this session - don't check again
+  // Determines whether the player has STABILIZED the world: power must
+  // reach WIN_POWER_THRESHOLD and STAY there continuously for
+  // WIN_HOLD_DURATION_MS. This used to be the win condition itself; now
+  // it's the gate that reveals the hidden treasure (see
+  // notifyTreasureFound() below for the actual win).
+  _checkStabilization(power) {
+    if (this._hasStabilized) return; // already stabilized this session - don't check again
 
     const now = performance.now();
 
@@ -316,18 +397,37 @@ export class GameEngine extends EventTarget {
       // How long has power been continuously at/above the threshold?
       const heldDuration = now - this._powerFullSince;
 
-      // If it's been held long enough, the player wins.
+      // If it's been held long enough, the world is considered
+      // stabilized - this reveals the treasure but does not end the run.
       if (heldDuration >= CONFIG.WIN_HOLD_DURATION_MS) {
-        this._hasWon = true;
-        this._alarm.stop(); // safety net - alarm should never play during/after a win
+        this._hasStabilized = true;
+        this._stabilizedHeldDuration = heldDuration;
 
-        this.dispatchEvent(new CustomEvent("win", { detail: { heldDuration } }));
+        this.dispatchEvent(new CustomEvent("stabilityachieved", { detail: { heldDuration } }));
       }
     } else {
       // Power dropped below the threshold - reset the countdown, since
-      // the win requires CONTINUOUS max power, not just reaching it once.
+      // stabilizing requires CONTINUOUS max power, not just reaching it once.
       this._powerFullSince = null;
     }
+  }
+
+  // Called from OUTSIDE the engine (by whatever is watching the
+  // player's position in the 3D world - see voxelWorld.js's treasure
+  // handler, wired up in menuController.js) the moment the player
+  // physically reaches the hidden treasure. This is the ONLY thing that
+  // actually wins the game now. Guarded so it can only do anything once
+  // the world has genuinely been stabilized (the treasure doesn't exist
+  // to be found before then) and only fires once per session.
+  notifyTreasureFound() {
+    if (this._hasWon || !this._hasStabilized) return;
+
+    this._hasWon = true;
+    this._alarm.stop(); // safety net - alarm should never play during/after a win
+
+    this.dispatchEvent(
+      new CustomEvent("win", { detail: { heldDuration: this._stabilizedHeldDuration } })
+    );
   }
 
   // Returns a single object representing the full current game state.
@@ -348,8 +448,9 @@ export class GameEngine extends EventTarget {
         zone: this._stability.zone,            // "stable" | "unstable" | "chaotic"
       },
       power: this._player.power,               // 10-100
-      hasWon: this._hasWon,                    // true once the win condition is met
-      hasFailed: this._hasFailed,              // true once stability has hit the hard fail threshold
+      hasStabilized: this._hasStabilized,      // true once the world has been stabilized (treasure unlocked)
+      hasWon: this._hasWon,                    // true once the treasure has actually been found
+      hasFailed: this._hasFailed,              // true once the run has ended in failure (see the "fail" event's reason)
       // Which input source is currently driving the world ("mic",
       // "keyboard", or null before any breath has been detected yet).
       activeInput: this._activeInput ? this._activeInput.name : null,

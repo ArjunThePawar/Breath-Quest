@@ -41,6 +41,12 @@ export function initPlayerMovement({
   spawnSplash,
 }) {
   let enabled = false;
+  // Separate from `enabled` on purpose: enable()/disable() are the
+  // full start/stop of a session (disable resets border/water state;
+  // enable() re-spawns the player). `paused` is for a temporary menu
+  // (Escape) that should freeze the player exactly where they are and
+  // resume from there - it must never trigger a respawn.
+  let paused = false;
   let yaw = Math.PI;
   let pitch = 0;
   let velocityY = 0;
@@ -55,7 +61,7 @@ export function initPlayerMovement({
   const keys = new Set();
 
   function onKeyDown(e) {
-    if (!enabled) return;
+    if (!enabled || paused) return;
     keys.add(e.code);
     // Jumping is disabled while swimming — treading water doesn't launch you.
     if (e.code === controls.jump && grounded && !inWater) {
@@ -120,7 +126,7 @@ export function initPlayerMovement({
   }
 
   function update(dt) {
-    if (!enabled) return;
+    if (!enabled || paused) return;
 
     const depth = getWaterDepth ? getWaterDepth(camera.position.x, camera.position.z) : 0;
     const nowInWater = depth > WATER_ENTRY_THRESHOLD;
@@ -244,6 +250,19 @@ export function initPlayerMovement({
       if (onBorderWarning) onBorderWarning(null);
       if (onWaterStateChange) onWaterStateChange(0);
       if (document.pointerLockElement === canvas) document.exitPointerLock();
+    },
+    // Freezes the player exactly where they are (used for the Escape
+    // pause menu) - deliberately does NOT touch position, border/water
+    // state, or call spawn(), unlike disable()/enable(), so resuming
+    // continues exactly where the player left off.
+    pause() {
+      paused = true;
+      keys.clear();
+      if (document.pointerLockElement === canvas) document.exitPointerLock();
+    },
+    resume() {
+      paused = false;
+      clock.getDelta(); // discard the paused duration so it isn't treated as a physics step
     },
     dispose() {
       disposed = true;

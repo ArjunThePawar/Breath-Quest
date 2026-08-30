@@ -100,11 +100,19 @@
 
     <div class="fail-banner" id="failBanner">
       <h2>FAILED</h2>
-      <p>You failed to meditate properly. Your world collapsed.</p>
+      <p id="failBannerText">You failed to meditate properly. Your world collapsed.</p>
       <button class="menu-btn" id="tryAgainBtn" style="pointer-events:all;">Try Again</button>
+      <button class="menu-btn" id="failMainMenuBtn" style="pointer-events:all;">Back to Main Menu</button>
     </div>
 
-    <div class="esc-hint">click to look around · WASD to move · breathe calmly and steadily</div>
+    <div class="pause-banner" id="pauseBanner">
+      <h2>PAUSED</h2>
+      <button class="menu-btn" id="pauseContinueBtn" style="pointer-events:all;">Continue</button>
+      <button class="menu-btn" id="pauseRestartBtn" style="pointer-events:all;">Restart</button>
+      <button class="menu-btn" id="pauseMainMenuBtn" style="pointer-events:all;">Back to Main Menu</button>
+    </div>
+
+    <div class="esc-hint">click to look around · WASD to move · Esc to pause · breathe calmly and steadily</div>
   </div>
 
   <script type="module">

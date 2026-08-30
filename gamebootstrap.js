@@ -13,6 +13,14 @@
 // can just press B at any point and the game switches over immediately,
 // with no waiting period. Whichever one is currently driving the world
 // is reported via the engine's "activeinputchange" event.
+//
+// WIN FLOW: holding max power stabilizes the world ("stabilityachieved")
+// rather than winning outright - that's the moment world.unlockTreasure()
+// reveals a treasure hidden somewhere on the island. The actual "win"
+// (and the win banner) only happens once the player physically walks up
+// to it - voxelWorld.js detects that proximity itself and calls back
+// through the handler wired up below, which tells the engine via
+// engine.notifyTreasureFound().
 
 import { KeyboardBreathInput, MicBreathInput } from "./breathInput.js";
 import { GameEngine } from "./gameLoop.js";
@@ -25,6 +33,16 @@ export async function startGame({ world, hud, onWin }) {
 
   const engine = new GameEngine([keyboardInput, micInput]);
 
+  // Fresh run: make sure any treasure left open/found from a previous
+  // session is hidden and reset before this one starts.
+  world.resetTreasure();
+
+  // The world detects the player's proximity to the (unlocked) treasure
+  // entirely on its own each frame - all it needs from us is something
+  // to call the instant that happens, which forwards the news to the
+  // engine so the real "win" event can fire.
+  world.setTreasureFoundHandler(() => engine.notifyTreasureFound());
+
   engine.addEventListener("tick", (e) => {
     const { breath, stability, power, hasWon, winProgressMs } = e.detail;
     hud.update({ breath, stability, power, hasWon, winProgressMs });
@@ -36,6 +54,23 @@ export async function startGame({ world, hud, onWin }) {
     hud.flashZoneChange(e.detail.from, e.detail.to);
   });
 
+  // Fires once, the moment the player holds 100% power/stability long
+  // enough. This is NOT the win - it reveals the treasure hidden
+  // somewhere on the island and tells the player to go find it. From
+  // this point on they must keep breathing CALMLY the entire time they
+  // search - see gameLoop.js's _tick(), which now fails the run the
+  // instant breathing slips out of "calm" once the hunt is on.
+  engine.addEventListener("stabilityachieved", () => {
+    world.unlockTreasure();
+    hud.flashInputMessage(
+      "The world is stable! A treasure lies hidden somewhere on the island — go find it. " +
+        "Keep breathing calmly the whole time you search, or you'll have to start over.",
+      { persist: true }
+    );
+  });
+
+  // Fires once, the moment the player actually reaches the treasure.
+  // This is the real win.
   engine.addEventListener("win", (e) => {
     hud.showWin(e.detail.heldDuration);
     updateSaveStats({ stabilityValue: 100, power: 100, hasWon: true });
@@ -47,8 +82,13 @@ export async function startGame({ world, hud, onWin }) {
   // the engine keeps running - so this just surfaces a "failed, try
   // again" message telling the player what happened without ending
   // their session for them.
-  engine.addEventListener("fail", () => {
-    hud.showFail();
+  //
+  // The engine can ALSO fire "fail" for a second, unrelated reason once
+  // the treasure hunt is on: losing calm breathing mid-search ends the
+  // run outright (no recovery). e.detail.reason tells the HUD which
+  // message to show.
+  engine.addEventListener("fail", (e) => {
+    hud.showFail(e.detail && e.detail.reason);
   });
 
   // Fires once per lightning/thunder strike, at the exact moment the

@@ -1,4 +1,3 @@
-
 // A small circular island surrounded by animated water, with a gradient
 // skybox that shifts color with world mood, plus added surface detail
 // (trees, rocks, grass tufts, drifting clouds) so the island reads as
@@ -10,6 +9,7 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { CONFIG } from "./config.js";
 
 const ISLAND_RADIUS = 26;
 // Pushed out to nearly the island's true edge (ISLAND_RADIUS = 15) —
@@ -428,6 +428,147 @@ export function initVoxelWorld(canvas) {
   if (instanced.instanceColor) instanced.instanceColor.needsUpdate = true;
   scene.add(instanced);
 
+  // ---- hidden treasure ----
+  // Collected from the same set of grass-zone cells trees/rocks/grass
+  // tufts get scattered across - so wherever the treasure ends up, it's
+  // naturally surrounded by the same foliage that hides everything
+  // else, not sitting in an obvious clearing. Excludes cells right next
+  // to the spawn point or the fence line, and biased toward the middle
+  // of the grass ring rather than right on the beach (too exposed) or
+  // deep against the rocky peak (too odd a place to bury a chest).
+  const treasureCandidates = [];
+  heightMap.forEach((info, keyStr) => {
+    const [x, z] = keyStr.split(",").map(Number);
+    const { h, dist } = info;
+    const isGrass = h <= 4 && h >= 1 && dist < ISLAND_RADIUS * 0.6;
+    if (!isGrass) return;
+    if (dist < ISLAND_RADIUS * 0.25 || dist > ISLAND_RADIUS * 0.55) return;
+    treasureCandidates.push({ x, z, h });
+  });
+
+  // Picks a genuinely random hiding spot out of every valid candidate
+  // cell - called once at startup, and again by resetTreasure() so a
+  // fresh run doesn't hide the treasure in the same place twice in a
+  // row.
+  function pickRandomTreasureCell() {
+    if (treasureCandidates.length === 0) {
+      return { x: CENTER, y: 2, z: CENTER }; // fallback, should never actually be hit
+    }
+    const cell = treasureCandidates[Math.floor(Math.random() * treasureCandidates.length)];
+    return { x: cell.x, y: cell.h, z: cell.z };
+  }
+
+  const TREASURE_POS = new THREE.Vector3();
+
+  const treasureGroup = new THREE.Group();
+
+  const chestGeo = new THREE.BoxGeometry(0.7, 0.45, 0.5);
+  const chestLidGeo = new THREE.BoxGeometry(0.72, 0.22, 0.52);
+  const chestTrimGeo = new THREE.BoxGeometry(0.1, 0.5, 0.54);
+  const chestWoodMat = new THREE.MeshStandardMaterial({ color: 0x6b4226, roughness: 0.85 });
+  const chestTrimMat = new THREE.MeshStandardMaterial({ color: 0xd9a441, roughness: 0.4, metalness: 0.6 });
+
+  const chestBase = new THREE.Mesh(chestGeo, chestWoodMat);
+  chestBase.position.y = 0.225;
+  chestBase.castShadow = true;
+  chestBase.receiveShadow = true;
+  treasureGroup.add(chestBase);
+
+  // Lid pivots open around its back edge once the treasure is found -
+  // parented to a small pivot group offset to the hinge line instead of
+  // the lid's own center, so rotating it swings it up like a real lid.
+  const lidPivot = new THREE.Group();
+  lidPivot.position.set(0, 0.45, -0.25);
+  const chestLid = new THREE.Mesh(chestLidGeo, chestWoodMat);
+  chestLid.position.set(0, 0.11, 0.26);
+  chestLid.castShadow = true;
+  lidPivot.add(chestLid);
+  treasureGroup.add(lidPivot);
+
+  const chestTrim = new THREE.Mesh(chestTrimGeo, chestTrimMat);
+  chestTrim.position.y = 0.3;
+  treasureGroup.add(chestTrim);
+
+  // A faint golden shimmer. Deliberately dim and VERY short-range (see
+  // TREASURE_GLOW_RADIUS in config.js) so it only becomes noticeable
+  // once the player is already close by - not a beacon visible from
+  // across the island.
+  const treasureGlowTex = makeGlowTexture();
+  const treasureGlowMat = new THREE.SpriteMaterial({
+    map: treasureGlowTex,
+    color: 0xffd479,
+    transparent: true,
+    depthWrite: false,
+    opacity: 0,
+    blending: THREE.AdditiveBlending,
+  });
+  const treasureGlow = new THREE.Sprite(treasureGlowMat);
+  treasureGlow.scale.set(1.3, 1.3, 1);
+  treasureGlow.position.y = 0.5;
+  treasureGroup.add(treasureGlow);
+
+  scene.add(treasureGroup);
+
+  let treasureUnlocked = false;
+  let treasureFound = false;
+  let treasureFoundHandler = null;
+  let treasureBobTime = 0;
+
+  // Moves the (currently hidden) treasure to a fresh random spot and
+  // gives it a random facing, so it doesn't always sit at the same
+  // angle relative to its hiding spot either.
+  function randomizeTreasurePosition() {
+    const cell = pickRandomTreasureCell();
+    TREASURE_POS.set(cell.x, cell.y, cell.z);
+    treasureGroup.position.copy(TREASURE_POS);
+    treasureGroup.rotation.y = Math.random() * Math.PI * 2;
+  }
+  randomizeTreasurePosition();
+  treasureGroup.visible = false; // hidden entirely until the world is stabilized
+
+  // Reveals the treasure in the world (still hidden by terrain/foliage,
+  // just no longer flat-out invisible) and starts checking the player's
+  // distance to it every frame. Safe to call more than once.
+  function unlockTreasure() {
+    if (treasureUnlocked) return;
+    treasureUnlocked = true;
+    treasureGroup.visible = true;
+  }
+
+  // Puts everything back to its pre-stabilization state and rolls a
+  // brand new random hiding spot - call this when starting a fresh run
+  // so a previous session's found/open treasure doesn't carry over, and
+  // so the hunt isn't in the same place twice in a row.
+  function resetTreasure() {
+    treasureUnlocked = false;
+    treasureFound = false;
+    treasureGroup.visible = false;
+    lidPivot.rotation.x = 0;
+    treasureGlow.material.opacity = 0;
+    treasureGlow.scale.set(1.3, 1.3, 1);
+    randomizeTreasurePosition();
+  }
+
+  // Registers the function to call the instant the player is found to
+  // be standing next to the (unlocked) treasure. Kept as a settable
+  // handler, rather than a constructor option, since the caller (the
+  // GameEngine) doesn't exist yet when the world is first created.
+  function setTreasureFoundHandler(fn) {
+    treasureFoundHandler = fn;
+  }
+
+  function getTreasurePosition() {
+    return { x: TREASURE_POS.x, y: TREASURE_POS.y, z: TREASURE_POS.z };
+  }
+
+  function isTreasureUnlocked() {
+    return treasureUnlocked;
+  }
+
+  function isTreasureFound() {
+    return treasureFound;
+  }
+
   // ---- decoration pass: trees, rocks, grass tufts ----
   const decorationGroup = new THREE.Group();
 
@@ -617,6 +758,34 @@ export function initVoxelWorld(canvas) {
 
     updateSplashes(dt);
 
+    // ---- treasure hunt ----
+    if (treasureUnlocked) {
+      // A slow idle bob so it reads as an object sitting in the world
+      // rather than a static prop, even before anyone's nearby.
+      treasureBobTime += dt;
+      treasureGroup.position.y = TREASURE_POS.y + Math.sin(treasureBobTime * 1.4) * 0.05;
+
+      if (!treasureFound) {
+        const dx = camera.position.x - treasureGroup.position.x;
+        const dz = camera.position.z - treasureGroup.position.z;
+        const distToTreasure = Math.sqrt(dx * dx + dz * dz);
+
+        // The glow only ramps up within a short range (see
+        // TREASURE_GLOW_RADIUS), so it can't be used to spot the
+        // treasure from far away - the player has to already be close.
+        const proximity = Math.max(0, 1 - distToTreasure / CONFIG.TREASURE_GLOW_RADIUS);
+        treasureGlow.material.opacity = proximity * 0.8;
+
+        if (distToTreasure <= CONFIG.TREASURE_FIND_RADIUS) {
+          treasureFound = true;
+          lidPivot.rotation.x = -Math.PI / 2.4; // pop the lid open
+          treasureGlow.scale.set(2.6, 2.6, 1);
+          treasureGlow.material.opacity = 1;
+          if (treasureFoundHandler) treasureFoundHandler();
+        }
+      }
+    }
+
     cloudGroup.children.forEach((c) => {
       c.position.x += c.userData.speed * dt;
       if (c.position.x > CENTER + 100) c.position.x = CENTER - 100;
@@ -651,6 +820,13 @@ export function initVoxelWorld(canvas) {
     setMood,
     setBrightness,
     setOrbiting,
+    // ---- treasure hunt API ----
+    unlockTreasure,
+    resetTreasure,
+    setTreasureFoundHandler,
+    getTreasurePosition,
+    isTreasureUnlocked,
+    isTreasureFound,
     dispose() {
       disposed = true;
       window.removeEventListener("resize", resize);
@@ -663,6 +839,13 @@ export function initVoxelWorld(canvas) {
       canopyMats.forEach((m) => m.dispose());
       rockGeo.dispose();
       tuftGeo.dispose();
+      chestGeo.dispose();
+      chestLidGeo.dispose();
+      chestTrimGeo.dispose();
+      chestWoodMat.dispose();
+      chestTrimMat.dispose();
+      treasureGlowTex.dispose();
+      treasureGlowMat.dispose();
       splashTex.dispose();
       splashPool.forEach((s) => s.material.dispose());
       activeSplashes.forEach((s) => s.material.dispose());

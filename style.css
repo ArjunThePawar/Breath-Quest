@@ -252,3 +252,21 @@ html, body{
   opacity: 0;
   transition: opacity 0.4s ease;
 }
+
+.lightning-flash{
+  position: fixed; inset: 0; pointer-events: none;
+  background: #ffffff;
+  opacity: 0;
+  z-index: 40;
+}
+.lightning-flash.flash{
+  animation: lightning-flash-anim 0.4s ease-out;
+}
+@keyframes lightning-flash-anim{
+  0%   { opacity: 0; }
+  8%   { opacity: 0.85; }
+  20%  { opacity: 0.15; }
+  35%  { opacity: 0.6; }
+  55%  { opacity: 0; }
+  100% { opacity: 0; }
+}

@@ -21,6 +21,7 @@ import { BreathAnalyzer } from "./breathAnalyzer.js";
 import { WorldStability } from "./worldStability.js";
 import { PlayerState } from "./playerState.js";
 import { AlarmSystem } from "./alarmsystem.js";
+import { ThunderSystem } from "./Thundersystem.js";
 
 export class GameEngine extends EventTarget {
   // inputSources: a single BreathInputSource instance, OR an array of
@@ -37,6 +38,8 @@ export class GameEngine extends EventTarget {
     this._stability = new WorldStability();
     this._player = new PlayerState();
     this._alarm = new AlarmSystem();
+    this._thunder = new ThunderSystem();
+    this._thunderTimeoutHandle = null; // handle for the next scheduled repeat strike, while chaotic persists
 
     // Each input source gets its OWN analyzer and classification. This
     // matters because the sources aren't interchangeable data - mixing
@@ -96,37 +99,44 @@ export class GameEngine extends EventTarget {
     this._hasFailed = false;
 
     // Wire up every input source identically - each one can independently
-    // report breath phases/cycles at any time, for the whole session.
+    // report breath phases/cycles/classifications at any time, for the
+    // whole session.
     for (const input of this._inputs) {
       input.addEventListener("breathphase", () => this._onBreathPhase(input));
       input.addEventListener("breathcycle", (e) => this._onBreathCycle(input, e));
+      input.addEventListener("breathclassification", (e) => this._onBreathClassification(input, e));
     }
 
     // Whenever the world's ZONE changes (e.g. unstable -> chaotic),
     // react accordingly: forward the event outward for the UI, AND
-    // control the alarm based on whether we entered/left "chaotic".
+    // control the alarm/thunder based on whether we entered/left
+    // "chaotic". Note: entering chaotic is NOT itself a failure - it's
+    // purely audiovisual (red bar, alarm, storm) and fully recoverable
+    // if stability climbs back up. The actual hard-failure check lives
+    // in _tick(), tied to the separate, lower STABILITY_FAIL_THRESHOLD.
     this._stability.addEventListener("zonechange", (e) => {
       // Let any UI code listening to the GameEngine know the zone changed.
       this.dispatchEvent(new CustomEvent("worldzonechange", { detail: e.detail }));
 
-      // Turn the alarm ON the moment the world becomes chaotic, and
-      // report a failure the first time this happens (guarded by
-      // _hasFailed, mirroring how "win" only ever fires once). This does
-      // NOT stop the engine - chaotic is still recoverable (the alarm
-      // turns back off in the "from chaotic" branch below if the player
-      // calms back down), so the UI can choose to show a "failed - try
-      // again" message without forcing the run to end.
+      // Turn the alarm ON the moment the world becomes chaotic.
       if (e.detail.to === "chaotic") {
         this._alarm.start();
-        if (!this._hasFailed) {
-          this._hasFailed = true;
-          this.dispatchEvent(new CustomEvent("fail", { detail: { reason: "world-collapsed" } }));
-        }
+        // Lightning + thunder together, the instant the world turns
+        // chaotic (the same moment the stability bar turns red), then
+        // keeps striking every few seconds for as long as the storm
+        // continues.
+        this._strikeLightning();
+        this._scheduleNextThunder();
       }
       // Turn the alarm OFF the moment the world LEAVES chaotic
       // (i.e. it was chaotic before, and now it's something else).
       else if (e.detail.from === "chaotic") {
         this._alarm.stop();
+        // The storm has passed - stop scheduling further thunder.
+        if (this._thunderTimeoutHandle) {
+          clearTimeout(this._thunderTimeoutHandle);
+          this._thunderTimeoutHandle = null;
+        }
       }
     });
   }
@@ -169,6 +179,20 @@ export class GameEngine extends EventTarget {
     }
   }
 
+  // Called whenever an input source reports an ALREADY-DECIDED
+  // classification directly (currently only MicBreathInput, which
+  // classifies from raw volume-change magnitude rather than cycle
+  // timing - see breathInput.js). No analyzer involved here at all;
+  // we just record it and, if this source is active, use it as-is.
+  _onBreathClassification(input, e) {
+    const state = this._perInputState.get(input);
+    state.classification = { state: e.detail.state, avgCycleMs: null, variance: null };
+
+    if (input === this._activeInput) {
+      this._latestClassification = state.classification;
+    }
+  }
+
   // Starts the whole engine: activates EVERY input source at once, and
   // begins the repeating tick loop. If one source fails to start (e.g.
   // the player denies microphone permission), that's caught individually
@@ -198,6 +222,11 @@ export class GameEngine extends EventTarget {
       if (input.stop) input.stop();
     }
     this._alarm.stop(); // make sure the alarm never keeps blaring after stop()
+    if (this._thunderTimeoutHandle) {
+      clearTimeout(this._thunderTimeoutHandle);
+      this._thunderTimeoutHandle = null;
+    }
+    this._thunder.dispose();
   }
 
   // Runs automatically every TICK_INTERVAL_MS. This is where stability,
@@ -229,8 +258,45 @@ export class GameEngine extends EventTarget {
     // Check whether the player has now met the win condition.
     this._checkWinCondition(power);
 
+    // Hard failure: stability collapsing all the way down to
+    // STABILITY_FAIL_THRESHOLD means the player failed to meditate/calm
+    // down in time. Unlike merely entering the (higher, recoverable)
+    // chaotic zone, this ends the run immediately - stop() below halts
+    // the tick loop, all input sources, the alarm, and any pending
+    // thunder, so nothing keeps running underneath the fail screen.
+    if (!this._hasFailed && stabilityValue <= CONFIG.STABILITY_FAIL_THRESHOLD) {
+      this._hasFailed = true;
+      this.stop();
+      this.dispatchEvent(
+        new CustomEvent("fail", { detail: { reason: "meditation-failed", stability: stabilityValue } })
+      );
+    }
+
     // Broadcast the full updated state, so any UI listening can redraw itself.
     this.dispatchEvent(new CustomEvent("tick", { detail: this.getState() }));
+  }
+
+  // Fires the visual "lightning" flash and the thunder audio together,
+  // for one strike. Real lightning is seen before it's heard (light
+  // outruns sound) - so the flash fires immediately, and the thunder
+  // clap follows a brief moment later, rather than both landing at the
+  // exact same instant.
+  _strikeLightning() {
+    this.dispatchEvent(new CustomEvent("lightning", { detail: {} }));
+    setTimeout(() => this._thunder.strike(), 120 + Math.random() * 180);
+  }
+
+  // Schedules the NEXT thunder strike a few seconds out, while the world
+  // remains chaotic. Re-schedules itself after each strike, so thunder
+  // keeps rumbling at randomized intervals for as long as the storm
+  // continues - cleared the moment the world leaves the chaotic zone
+  // (see the "from chaotic" branch above) or the engine stops.
+  _scheduleNextThunder() {
+    const delayMs = 3000 + Math.random() * 4000; // every 3-7 seconds
+    this._thunderTimeoutHandle = setTimeout(() => {
+      this._strikeLightning();
+      this._scheduleNextThunder();
+    }, delayMs);
   }
 
   // Determines whether the player has won: power must reach WIN_POWER_THRESHOLD
@@ -283,7 +349,7 @@ export class GameEngine extends EventTarget {
       },
       power: this._player.power,               // 10-100
       hasWon: this._hasWon,                    // true once the win condition is met
-      hasFailed: this._hasFailed,              // true once the world has collapsed into chaos at least once
+      hasFailed: this._hasFailed,              // true once stability has hit the hard fail threshold
       // Which input source is currently driving the world ("mic",
       // "keyboard", or null before any breath has been detected yet).
       activeInput: this._activeInput ? this._activeInput.name : null,

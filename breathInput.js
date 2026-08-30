@@ -1,11 +1,19 @@
 // breathInput.js
-// This file's ONLY job is detecting the raw timing of breath cycles.
-//not realted to anything about stability, power, alarms, or winning -
-// it just watches for "one breath happened" moments and reports how much
-// time passed since the previous one.
-// Two interchangeable sources are provided below. Both emit the exact
-// same kind of event ("breathcycle"), so the rest of the game can use
-// either one without caring which is active.
+// This file detects breathing/input activity from two different
+// sources, which classify breathing in two DIFFERENT ways:
+//   - KeyboardBreathInput: rhythm-based. Each key tap is a full
+//     simulated breath; the TIMING between taps ("breathcycle" events,
+//     with a cycleDurationMs) is what breathAnalyzer.js turns into a
+//     calm/moderate/panicked/erratic classification.
+//   - MicBreathInput: volume-based. There's no notion of a "cycle" at
+//     all - it continuously measures how much the mic's volume is
+//     changing moment to moment, and reports a direct classification
+//     ("breathclassification" events, with a state already decided) -
+//     a big volume swing means panicked, a small one means calm.
+// Both sources also emit "breathphase" any time there's genuine
+// activity, regardless of classification - this is what the rest of
+// the game (gameLoop.js) uses to know a source is actively in use, for
+// idle-detection and for picking which source is "driving" the world.
 
 import { CONFIG } from "./config.js";
 
@@ -118,50 +126,56 @@ export class KeyboardBreathInput extends BreathInputSource {
 }
 
 // Microphone input (real breathing detection)
-// Uses the Web Audio API to listen to the microphone and detect
-// "breath peaks" - moments where the sound is noticeably louder than
-// the surrounding ambient noise (an inhale/exhale sound).
+// Uses the Web Audio API to listen to the microphone and classify
+// breathing DIRECTLY from how much the volume changes moment to moment,
+// relative to the loudest volume this mic has picked up so far:
+//   - a volume swing that's a large fraction (3/4 by default) of the
+//     loudest sound heard so far this session -> panicked
+//   - anything smaller -> calm
+// No cycle timing, no sustained-peak detection, no filtering.
 export class MicBreathInput extends BreathInputSource {
   constructor() {
-    super(2); // a real breath = inhale phase + exhale phase
+    super();
     this.name = "mic";                 // lets GameEngine report which input is driving the game
     this._audioContext = null;         // the Web Audio context (created on start)
     this._analyser = null;             // node that gives us live audio data
     this._dataArray = null;            // buffer that holds the raw waveform data
     this._rafId = null;                // requestAnimationFrame handle, so we can cancel the loop later
-    this._lastRegisteredTime = 0;      // timestamp of the last counted breath (for debouncing)
     this.usesMic = true;               // general-purpose flag identifying this source type
 
-    // We track a "noise floor" - the ambient background loudness - so the
-    // detector adapts to different rooms/microphones instead of using
-    // one fixed number that might be wrong for a loud or quiet space.
-    this._noiseFloor = 0;
+    // Two running averages of the same volume signal, at different
+    // speeds - comparing them is how we measure a MEANINGFUL change in
+    // volume (see _loop() for why a single-frame comparison doesn't work).
+    this._fastAmplitude = 0;
+    this._slowAmplitude = 0;
 
-    // Tracks how long the current loud moment has been sustained, so we
-    // can tell a real inhale/exhale (breath sound held for a while) apart
-    // from a click, pop, tap, or other brief noise spike.
-    this._aboveThresholdSince = null;
-    this._phaseAlreadyRegistered = false;
+    // The loudest volume this mic has picked up so far THIS SESSION -
+    // our live stand-in for "the max volume input possible". There's no
+    // fixed hardware ceiling real breathing/voice ever actually reaches,
+    // so a hardcoded absolute number would either be unreachable (too
+    // strict) or trivially exceeded (too loose) depending on the room
+    // and mic gain. Tracking the actual observed peak makes the panic
+    // threshold self-calibrating to whoever is playing. Starts at a
+    // small nonzero floor so early frames (before any real peak has
+    // been seen yet) aren't compared against ~0.
+    this._maxAmplitude = CONFIG.MIC_MAX_AMPLITUDE_FLOOR;
   }
 
   // Requests microphone access and starts analyzing audio.
   async start() {
-    // Ask the browser for permission to use the microphone.
+    // Ask the browser for microphone access - plain and unfiltered, since
+    // classification here works directly off the raw volume signal.
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-    // Create the audio processing graph.
     this._audioContext = new (window.AudioContext || window.webkitAudioContext)();
     const source = this._audioContext.createMediaStreamSource(stream);
 
-    // The analyser node lets us read live volume/frequency data.
     this._analyser = this._audioContext.createAnalyser();
     this._analyser.fftSize = CONFIG.MIC_FFT_SIZE;
     this._dataArray = new Uint8Array(this._analyser.frequencyBinCount);
 
-    // Connect the microphone source into the analyser.
     source.connect(this._analyser);
 
-    // Begin the continuous analysis loop.
     this._loop();
   }
 
@@ -187,60 +201,52 @@ export class MicBreathInput extends BreathInputSource {
     return Math.sqrt(sumSquares / this._dataArray.length);
   }
 
-  // Runs continuously, once per animation frame, checking for breath peaks.
-  //
-  // A moment only counts as a real breath phase (one inhale or one
-  // exhale) once the sound has stayed above the dynamic threshold
-  // continuously for MIN_BREATH_PHASE_MS - this is what distinguishes
-  // actual sustained mouth-breathing from a stray click, cough, tap, or
-  // background noise blip, which fall back below threshold almost
-  // immediately and never accumulate enough sustained time to register.
+  // Runs continuously, once per animation frame. Tracks TWO running
+  // averages of the volume, at different speeds:
+  //   - fast average: reacts almost immediately to a real volume change
+  //   - slow average: drifts along with the recent overall level,
+  //     barely reacting to any single moment
+  // The gap between them is the "change in volume". That gets compared
+  // against a threshold that is ITSELF a fraction (3/4 by default) of
+  // the loudest volume this mic has picked up so far this session -
+  // i.e. "panicked" means a volume swing that's a large portion of as
+  // loud as this mic/room has gotten, not an arbitrary fixed number.
+  //   - change >= 3/4 of session peak -> "panicked"
+  //   - change <  3/4 of session peak -> "calm"
   _loop() {
-    const amplitude = this._getNormalizedAmplitude();
+    const rawAmplitude = this._getNormalizedAmplitude();
     const now = performance.now();
 
-    // Slowly adjust our estimate of the "ambient" noise level, so quiet
-    // rooms and loud rooms both work without manual reconfiguration.
-    //
-    // IMPORTANT: this must only happen while the sound is QUIET (at/below
-    // the last known threshold). If we let it adapt on every frame
-    // regardless of loudness, a sustained breath sound (exactly what
-    // we're trying to detect) drags the "noise floor" up to meet the
-    // breath itself. The threshold then chases the very sound it's
-    // supposed to catch, and after a moment the breath stops clearing
-    // it - real, ongoing breathing silently stops registering.
-    const previousThreshold = this._noiseFloor + CONFIG.MIC_PEAK_THRESHOLD;
-    if (amplitude <= previousThreshold) {
-      this._noiseFloor = this._noiseFloor * 0.98 + amplitude * 0.02;
+    this._fastAmplitude = this._fastAmplitude * 0.6 + rawAmplitude * 0.4;
+    this._slowAmplitude = this._slowAmplitude * 0.95 + rawAmplitude * 0.05;
+
+    // Keep track of the loudest moment seen so far this session - this
+    // never decreases, so once a genuinely loud breath happens, it
+    // permanently calibrates what "loud" means for the rest of the run.
+    if (this._fastAmplitude > this._maxAmplitude) {
+      this._maxAmplitude = this._fastAmplitude;
     }
 
-    const dynamicThreshold = this._noiseFloor + CONFIG.MIC_PEAK_THRESHOLD;
-    const isAboveThreshold = amplitude > dynamicThreshold;
+    const volumeChange = Math.abs(this._fastAmplitude - this._slowAmplitude);
+    const panicThreshold = this._maxAmplitude * CONFIG.MIC_PANIC_VOLUME_FRACTION;
 
-    if (isAboveThreshold) {
-      // Mark when this loud moment started, so we can measure how long
-      // it's been sustained.
-      if (this._aboveThresholdSince === null) {
-        this._aboveThresholdSince = now;
-      }
+    // Only bother classifying (and counting this as real activity) once
+    // there's actually meaningful sound at all - otherwise constant tiny
+    // fluctuations in silence/ambient hiss would still register as
+    // "calm breathing" nonstop, which would be indistinguishable from
+    // genuine silence and defeat the idle-detection in gameLoop.js.
+    if (this._fastAmplitude > CONFIG.MIC_SOUND_FLOOR) {
+      // Announce that real activity is happening right now (keeps
+      // idle-timeout and active-input switching in gameLoop.js honest).
+      this.dispatchEvent(new CustomEvent("breathphase", { detail: { timestamp: now } }));
 
-      const sustainedMs = now - this._aboveThresholdSince;
-      const enoughGapSinceLast = now - this._lastRegisteredTime > CONFIG.MIC_MIN_PEAK_GAP_MS;
+      const state = volumeChange >= panicThreshold ? "panicked" : "calm";
 
-      // Register at most once per sustained sound (not once per frame
-      // while it stays loud), and only once it's been held long enough
-      // to be a real breath rather than a quick blip.
-      if (!this._phaseAlreadyRegistered && sustainedMs >= CONFIG.MIN_BREATH_PHASE_MS && enoughGapSinceLast) {
-        this._lastRegisteredTime = now;
-        this._phaseAlreadyRegistered = true;
-        this._registerBreathPeak(now);
-      }
-    } else {
-      // Sound dropped back to ambient level - reset so the NEXT
-      // sustained sound (the next inhale or exhale) can be detected
-      // fresh, instead of this flag staying stuck from a past one.
-      this._aboveThresholdSince = null;
-      this._phaseAlreadyRegistered = false;
+      this.dispatchEvent(
+        new CustomEvent("breathclassification", {
+          detail: { state, volumeChange, panicThreshold, amplitude: this._fastAmplitude, timestamp: now },
+        })
+      );
     }
 
     // Schedule the next check on the next animation frame.

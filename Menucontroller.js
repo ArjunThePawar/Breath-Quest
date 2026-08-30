@@ -245,6 +245,7 @@ export function initApp() {
   const winBanner = document.getElementById("winBanner");
   const winBannerText = document.getElementById("winBannerText");
   const failBanner = document.getElementById("failBanner");
+  const lightningFlash = document.getElementById("lightningFlash");
   const inputModeEl = document.getElementById("inputModeValue");
 
   let zoneBannerTimeout = null;
@@ -288,6 +289,17 @@ export function initApp() {
     showFail() {
       failBanner.classList.add("show");
     },
+    flashLightning() {
+      // Restart the CSS animation even if a previous flash is still
+      // fading out, so rapid successive strikes each get their own
+      // visible flash instead of the class-toggle being a no-op.
+      lightningFlash.classList.remove("flash");
+      // Force a reflow so the browser registers the class removal
+      // before we re-add it - otherwise removing+re-adding in the same
+      // tick is collapsed into nothing happening.
+      void lightningFlash.offsetWidth;
+      lightningFlash.classList.add("flash");
+    },
     setInputMode(mode) {
       if (mode === "mic") inputModeEl.textContent = "Microphone";
       else if (mode === "keyboard") inputModeEl.textContent = "Keyboard (press B)";
@@ -327,7 +339,12 @@ export function initApp() {
   }
 
   document.getElementById("tryAgainBtn").addEventListener("click", () => {
+    // The engine that triggered this fail screen has already stopped
+    // itself (see gameLoop.js's hard-failure check), so this just needs
+    // to kick off a completely fresh run - same flow as starting a new
+    // game, without forcing the player back through the main menu.
     failBanner.classList.remove("show");
+    beginPlay();
   });
 
   document.getElementById("escToMenuBtn").addEventListener("click", () => {

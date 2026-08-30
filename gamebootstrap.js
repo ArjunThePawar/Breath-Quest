@@ -51,6 +51,12 @@ export async function startGame({ world, hud, onWin }) {
     hud.showFail();
   });
 
+  // Fires once per lightning/thunder strike, at the exact moment the
+  // visual flash should happen (thunder audio follows a beat later).
+  engine.addEventListener("lightning", () => {
+    hud.flashLightning();
+  });
+
   // Fires the instant a DIFFERENT input source than before produces a
   // real breath - i.e. the player just switched from breathing to
   // pressing B, or vice versa. Update the HUD label to match, and give

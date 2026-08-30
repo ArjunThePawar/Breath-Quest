@@ -1,4 +1,5 @@
-//  does not modify config.js, breathInput.js, etc.
+// userSettings.js  (NEW FILE — does not modify config.js, breathInput.js, etc.)
+//
 // Owns all player-adjustable settings: volume, brightness, sensitivity,
 // music on/off, and key bindings. Settings are persisted to
 // localStorage and, where relevant, applied to the existing CONFIG
@@ -15,8 +16,7 @@ const STORAGE_KEY = "breathQuest_settings_v1";
 // slider back and forth never compounds/drifts.
 const BASE = {
   ALARM_VOLUME: CONFIG.ALARM_VOLUME,
-  MIC_PEAK_THRESHOLD: CONFIG.MIC_PEAK_THRESHOLD,
-  MIC_MIN_PEAK_GAP_MS: CONFIG.MIC_MIN_PEAK_GAP_MS,
+  MIC_PANIC_VOLUME_FRACTION: CONFIG.MIC_PANIC_VOLUME_FRACTION,
 };
 
 // Default control scheme. NOTE: these are NOT wired to any gameplay yet —
@@ -71,11 +71,17 @@ export function applySettingsToConfig(settings) {
   CONFIG.ALARM_VOLUME = (settings.volume / 100) * 0.3;
 
   // Sensitivity: 50 = baseline (uses config.js defaults exactly).
-  // Higher sensitivity = lower amplitude threshold + shorter debounce gap,
-  // so quieter/faster breaths still register.
+  // Higher sensitivity = a SMALLER fraction of the session's loudest
+  // volume is enough to count as "panicked" (easier to trigger); lower
+  // sensitivity requires a swing closer to the full observed peak.
+  // Clamped so extreme slider positions can't make panicked either
+  // permanently on (fraction near 0) or effectively unreachable
+  // (fraction above 1).
   const sensitivityFactor = Math.max(0.2, settings.sensitivity / 50);
-  CONFIG.MIC_PEAK_THRESHOLD = BASE.MIC_PEAK_THRESHOLD / sensitivityFactor;
-  CONFIG.MIC_MIN_PEAK_GAP_MS = Math.round(BASE.MIC_MIN_PEAK_GAP_MS / sensitivityFactor);
+  CONFIG.MIC_PANIC_VOLUME_FRACTION = Math.min(
+    1.0,
+    Math.max(0.15, BASE.MIC_PANIC_VOLUME_FRACTION / sensitivityFactor)
+  );
 
   // Brightness has no CONFIG equivalent — voxelWorld.js reads
   // settings.brightness directly, so nothing to mutate here.

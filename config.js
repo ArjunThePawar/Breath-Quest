@@ -32,8 +32,16 @@ export const CONFIG = {
                                     // silence/no-input must never be treated as "moderate breathing".
 
   // Crossing these thresholds changes the "zone" of the world.
-  STABILITY_CHAOTIC_THRESHOLD: 30,  // at/below this value, world = "chaotic"
+  STABILITY_CHAOTIC_THRESHOLD: 40,  // at/below this value, world = "chaotic" (alarm, thunder, red bar -
+                                     // still RECOVERABLE if stability climbs back up)
   STABILITY_STABLE_THRESHOLD: 75,   // at/above this value, world = "stable"
+  // If stability keeps falling all the way down to this value, that's a
+  // HARD failure, not just "the world is currently chaotic" - the run
+  // ends immediately ("failed to meditate properly"), unlike the
+  // chaotic zone above which stays recoverable. Must be lower than
+  // STABILITY_CHAOTIC_THRESHOLD - crossing it always means chaotic was
+  // already active first.
+  STABILITY_FAIL_THRESHOLD: 20,
   // anything between the two thresholds = "unstable"
 
   // Player power settings
@@ -51,12 +59,23 @@ export const CONFIG = {
   NO_INPUT_TIMEOUT_MS: 6500,
 
   //  Microphone input settings 
-  MIC_FFT_SIZE: 1024,           // size of the audio analysis buffer (must be a power of 2)
-  MIC_PEAK_THRESHOLD: 0.15,     // how much louder than the noise floor counts as a "breath"
-  MIC_MIN_PEAK_GAP_MS: 700,     // ignore peaks closer together than this (prevents double-counting one breath)
-  MIN_BREATH_PHASE_MS: 180,     // a loud moment only counts as a real inhale/exhale once it has
-                                 // stayed above the threshold for this long - filters out short
-                                 // clicks, pops, taps, and stray noise that aren't actual mouth-breathing
+  // MicBreathInput classifies breathing directly from how much the
+  // mic's volume changes moment to moment, relative to the loudest
+  // volume it's picked up so far this session - no cycle timing, no
+  // sustained-peak detection.
+  MIC_FFT_SIZE: 1024,               // size of the audio analysis buffer (must be a power of 2)
+  MIC_SOUND_FLOOR: 0.02,            // minimum (smoothed) volume before we consider there to be any
+                                     // real sound at all - filters out constant near-silent hiss so
+                                     // it doesn't count as ongoing "calm breathing" during true silence
+  MIC_MAX_AMPLITUDE_FLOOR: 0.15,    // starting/minimum value for "the loudest volume seen so far" -
+                                     // without this, the very first few frames of a session (before any
+                                     // real peak has occurred) would be compared against ~0
+  MIC_PANIC_VOLUME_FRACTION: 0.75,  // "panicked" triggers once a volume change reaches this fraction
+                                     // of the loudest volume this mic has picked up so far this session
+                                     // (3/4 by default) - a change SMALLER than this fraction is "calm".
+                                     // Lower this to make panicked easier to trigger (a smaller swing,
+                                     // relative to the loudest moment so far, counts as panicked);
+                                     // raise it to require a sharper, more extreme swing.
   // NOTE: there used to be a MIC_FALLBACK_TIMEOUT_MS here that switched
   // from mic to keyboard input after a period of silence. That's no
   // longer needed - both input methods now run simultaneously from the

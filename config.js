@@ -22,7 +22,9 @@ export const CONFIG = {
   STABILITY_START: 60,         // stability value when the game begins
 
   // How much stability changes per game-loop tick, based on breath state.
-  STABILITY_GAIN_CALM: 1.5,        // calm breathing raises stability (was 0.6 — increased for faster progress)
+  STABILITY_GAIN_CALM: 1.0,        // calm breathing raises stability - now matches
+                                    // STABILITY_LOSS_PANICKED (1.0) 1:1, instead of
+                                    // rising faster (1.5) than it falls (was 1.5)
   STABILITY_GAIN_MODERATE: 0.4,    // moderate breathing raises it a bit (was 0.1 — increased for faster progress)
   STABILITY_LOSS_PANICKED: 1.0,    // panicked breathing lowers it noticeably
   STABILITY_LOSS_ERRATIC: 0.6,     // erratic (irregular) breathing lowers it moderately

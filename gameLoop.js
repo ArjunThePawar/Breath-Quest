@@ -200,13 +200,6 @@ export class GameEngine extends EventTarget {
     const state = this._perInputState.get(input);
     state.classification = { state: e.detail.state, avgCycleMs: null, variance: null };
 
-    // TEMP DEBUG — remove once panicked detection is confirmed working end-to-end.
-    console.log(
-      `[classification] source=${input.name} state=${e.detail.state} ` +
-      `isActive=${input === this._activeInput} ` +
-      `activeInput=${this._activeInput ? this._activeInput.name : null}`
-    );
-
     if (input === this._activeInput) {
       this._latestClassification = state.classification;
     }
@@ -301,14 +294,6 @@ export class GameEngine extends EventTarget {
         ? "idle"
         : this._latestClassification.state;
     this._effectiveState = effectiveState;
-
-    // TEMP DEBUG — remove once panicked detection is confirmed working end-to-end.
-    console.log(
-      `[tick] effectiveState=${effectiveState} ` +
-      `latestClassification=${this._latestClassification.state} ` +
-      `activeInput=${this._activeInput ? this._activeInput.name : null} ` +
-      `timeSinceLastBreath=${Math.round(timeSinceLastBreath)}ms`
-    );
 
     // Update stability based on the current breathing state. "idle"
     // gently drains stability instead of granting anything (see

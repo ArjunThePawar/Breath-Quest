@@ -25,6 +25,7 @@
 import { KeyboardBreathInput, MicBreathInput } from "./breathInput.js";
 import { GameEngine } from "./gameLoop.js";
 import { updateSaveStats } from "./savesystem.js";
+import { createSessionRecorder } from "./Sessionsummary.js";
 
 // Starts the game with both input methods live simultaneously.
 export async function startGame({ world, hud, onWin }) {
@@ -32,6 +33,13 @@ export async function startGame({ world, hud, onWin }) {
   const micInput = new MicBreathInput();
 
   const engine = new GameEngine([keyboardInput, micInput]);
+
+  // Records stability-over-time (and calm/panicked tick counts) for
+  // this run, so the win/fail screen can show an actual chart and a
+  // few headline stats from the session that just happened, instead of
+  // just a pass/fail message.
+  const recorder = createSessionRecorder();
+  recorder.start();
 
   // Fresh run: make sure any treasure left open/found from a previous
   // session is hidden and reset before this one starts.
@@ -48,6 +56,7 @@ export async function startGame({ world, hud, onWin }) {
     hud.update({ breath, stability, power, hasWon, winProgressMs });
     world.setMood(stability.zone, stability.value);
     updateSaveStats({ stabilityValue: stability.value, power, hasWon });
+    recorder.record(stability.value, breath.state);
   });
 
   engine.addEventListener("worldzonechange", (e) => {
@@ -72,7 +81,7 @@ export async function startGame({ world, hud, onWin }) {
   // Fires once, the moment the player actually reaches the treasure.
   // This is the real win.
   engine.addEventListener("win", (e) => {
-    hud.showWin(e.detail.heldDuration);
+    hud.showWin(e.detail.heldDuration, recorder.getSummary());
     updateSaveStats({ stabilityValue: 100, power: 100, hasWon: true });
     if (onWin) onWin(e.detail);
   });
@@ -88,7 +97,7 @@ export async function startGame({ world, hud, onWin }) {
   // run outright (no recovery). e.detail.reason tells the HUD which
   // message to show.
   engine.addEventListener("fail", (e) => {
-    hud.showFail(e.detail && e.detail.reason);
+    hud.showFail(e.detail && e.detail.reason, recorder.getSummary());
   });
 
   // Fires once per lightning/thunder strike, at the exact moment the
@@ -112,10 +121,12 @@ export async function startGame({ world, hud, onWin }) {
   });
 
   hud.setInputMode(null);
+  hud.flashInputMessage("Setting up microphone and keyboard input…", { persist: true });
+
+  await engine.start();
+
   hud.flashInputMessage(
     "Breathe calmly through your mouth into the mic, or press B every few seconds - whichever you use will drive the world."
   );
-
-  await engine.start();
   return engine;
 }

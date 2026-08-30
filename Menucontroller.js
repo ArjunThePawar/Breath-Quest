@@ -21,6 +21,10 @@ import {
 } from "./Usersettings.js";
 import { hasSave, createNewSave, continueSave } from "./savesystem.js";
 import { startGame } from "./gamebootstrap.js";
+import { hasSeenOnboarding, markOnboardingSeen, ONBOARDING_STEPS } from "./Onboarding.js";
+import { createBreathingGuide } from "./Breathingguide.js";
+import { DIFFICULTIES, applyDifficulty } from "./Difficulty.js";
+import { renderSessionSummary } from "./Sessionsummary.js";
 
 export function initApp() {
   const canvas = document.getElementById("worldCanvas");
@@ -36,6 +40,7 @@ export function initApp() {
 
   let settings = loadSettings();
   applySettingsToConfig(settings);
+  applyDifficulty(settings.difficulty);
   world.setBrightness(settings.brightness);
 
   // ---- HUD elements needed before initPlayerMovement, since the
@@ -75,6 +80,30 @@ export function initApp() {
     window.addEventListener("pointerdown", unlockAudio, { once: true });
     window.addEventListener("keydown", unlockAudio, { once: true });
   }
+
+  // ================= VISUAL BREATHING GUIDE =================
+  // A purely optional on-screen pacer (expanding/contracting circle) -
+  // entirely decoupled from actual breath detection. Useful for demos
+  // and as an accessibility aid; see breathingGuide.js.
+  const breathingGuideToggleBtn = document.getElementById("breathingGuideToggleBtn");
+  const breathingGuideEl = document.getElementById("breathingGuide");
+  const breathingGuideCircle = document.getElementById("breathingGuideCircle");
+  const breathingGuideLabel = document.getElementById("breathingGuideLabel");
+  const breathingGuide = createBreathingGuide(breathingGuideCircle, breathingGuideLabel);
+
+  function refreshBreathingGuideButton() {
+    const on = breathingGuide.isRunning();
+    breathingGuideToggleBtn.textContent = on ? "🫁 Guide: On" : "🫁 Guide: Off";
+    breathingGuideToggleBtn.classList.toggle("active", on);
+    breathingGuideEl.classList.toggle("show", on);
+  }
+  refreshBreathingGuideButton();
+
+  breathingGuideToggleBtn.addEventListener("click", () => {
+    if (breathingGuide.isRunning()) breathingGuide.stop();
+    else breathingGuide.start();
+    refreshBreathingGuideButton();
+  });
 
   // Movement is purely visual (walks the camera around the island) —
   // it does not touch breath/stability/power at all. settings.controls
@@ -117,6 +146,7 @@ export function initApp() {
   const screens = {
     main: document.getElementById("mainMenu"),
     settings: document.getElementById("settingsMenu"),
+    onboarding: document.getElementById("onboardingScreen"),
   };
 
   function showScreen(name) {
@@ -153,6 +183,81 @@ export function initApp() {
   });
 
   settingsBtn.addEventListener("click", () => showScreen("settings"));
+
+  // ================= DIFFICULTY SELECTOR =================
+  const difficultyButtons = Array.from(document.querySelectorAll(".difficulty-btn"));
+
+  function refreshDifficultyButtons() {
+    difficultyButtons.forEach((btn) => {
+      btn.classList.toggle("selected", btn.dataset.difficulty === settings.difficulty);
+    });
+  }
+  refreshDifficultyButtons();
+
+  difficultyButtons.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      settings.difficulty = btn.dataset.difficulty;
+      saveSettings(settings);
+      applyDifficulty(settings.difficulty);
+      refreshDifficultyButtons();
+    });
+  });
+
+  // ================= ONBOARDING / HOW TO PLAY =================
+  const onboardingStepTitle = document.getElementById("onboardingStepTitle");
+  const onboardingStepText = document.getElementById("onboardingStepText");
+  const onboardingDots = document.getElementById("onboardingDots");
+  const onboardingNextBtn = document.getElementById("onboardingNextBtn");
+  const onboardingSkipBtn = document.getElementById("onboardingSkipBtn");
+  const howToPlayBtn = document.getElementById("howToPlayBtn");
+
+  let onboardingIndex = 0;
+
+  function renderOnboardingStep() {
+    const step = ONBOARDING_STEPS[onboardingIndex];
+    onboardingStepTitle.textContent = step.title;
+    onboardingStepText.textContent = step.text;
+
+    onboardingDots.innerHTML = "";
+    ONBOARDING_STEPS.forEach((_, i) => {
+      const dot = document.createElement("div");
+      dot.className = "onboarding-dot" + (i === onboardingIndex ? " active" : "");
+      onboardingDots.appendChild(dot);
+    });
+
+    onboardingNextBtn.textContent = onboardingIndex === ONBOARDING_STEPS.length - 1 ? "Got it" : "Next";
+  }
+
+  function openOnboarding() {
+    onboardingIndex = 0;
+    renderOnboardingStep();
+    showScreen("onboarding");
+  }
+
+  function finishOnboarding() {
+    markOnboardingSeen();
+    showScreen("main");
+  }
+
+  onboardingNextBtn.addEventListener("click", () => {
+    if (onboardingIndex < ONBOARDING_STEPS.length - 1) {
+      onboardingIndex++;
+      renderOnboardingStep();
+    } else {
+      finishOnboarding();
+    }
+  });
+
+  onboardingSkipBtn.addEventListener("click", () => finishOnboarding());
+  howToPlayBtn.addEventListener("click", () => openOnboarding());
+
+  // First-ever launch (tracked in localStorage): show the explainer
+  // instead of dropping straight into the main menu. This runs after
+  // showScreen("main") above, but still before the browser paints
+  // anything, so there's no visible flash of the main menu first.
+  if (!hasSeenOnboarding()) {
+    openOnboarding();
+  }
 
   // ================= SETTINGS MENU =================
   const volumeSlider = document.getElementById("volumeSlider");
@@ -252,9 +357,27 @@ export function initApp() {
   const winBannerText = document.getElementById("winBannerText");
   const failBanner = document.getElementById("failBanner");
   const failBannerText = document.getElementById("failBannerText");
+  const winSummaryEl = document.getElementById("winSummary");
+  const failSummaryEl = document.getElementById("failSummary");
   const pauseBanner = document.getElementById("pauseBanner");
   const lightningFlash = document.getElementById("lightningFlash");
   const inputModeEl = document.getElementById("inputModeValue");
+
+  // Simulates pressing/releasing the B key that KeyboardBreathInput
+  // already listens for - no changes needed to breathInput.js itself.
+  // Lets touch/mobile users (or anyone who'd rather not use the mic at
+  // all) drive the game with taps instead of a physical keyboard.
+  const tapBreatheBtn = document.getElementById("tapBreatheBtn");
+  tapBreatheBtn.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyB" }));
+  });
+  tapBreatheBtn.addEventListener("pointerup", () => {
+    window.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyB" }));
+  });
+  tapBreatheBtn.addEventListener("pointercancel", () => {
+    window.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyB" }));
+  });
 
   let zoneBannerTimeout = null;
   let inputBannerTimeout = null;
@@ -290,19 +413,21 @@ export function initApp() {
         inputBannerTimeout = setTimeout(() => inputBanner.classList.remove("show"), 6000);
       }
     },
-    showWin(heldDurationMs) {
+    showWin(heldDurationMs, summary) {
       winBannerText.textContent = `Stabilized the world and found the treasure! (held maximum power for ${(heldDurationMs / 1000).toFixed(1)}s)`;
+      if (summary) renderSessionSummary(winSummaryEl, summary);
       winBanner.classList.add("show");
       // The persistent "go find the treasure" hint is no longer useful
       // once it's actually been found.
       clearTimeout(inputBannerTimeout);
       inputBanner.classList.remove("show");
     },
-    showFail(reason) {
+    showFail(reason, summary) {
       failBannerText.textContent =
         reason === "treasure-hunt-broken"
           ? "You failed to maintain a calm breathing stage while finding the treasure. Do it all over again."
           : "You failed to meditate properly. Your world collapsed.";
+      if (summary) renderSessionSummary(failSummaryEl, summary);
       failBanner.classList.add("show");
       // The persistent "go find the treasure, stay calm" hint is no
       // longer relevant once the run has ended.

@@ -29,6 +29,7 @@ export function getDefaultSettings() {
     brightness: 50,     // 0-100, maps to renderer exposure in voxelWorld.js
     sensitivity: 50,    // 0-100, maps to mic peak threshold / gap
     musicEnabled: true, // whether the ambient background music should play
+    difficulty: "normal", // "zen" | "normal" | "hard" - see difficulty.js
     controls: {
       moveForward: "KeyW",
       moveBackward: "KeyS",

@@ -21,6 +21,7 @@
   <canvas id="worldCanvas"></canvas>
 
   <button id="musicToggleBtn" class="music-toggle" title="Toggle background music">🔇 Music: Off</button>
+  <button id="breathingGuideToggleBtn" class="breathing-guide-toggle" title="Toggle visual breathing pacer">🫁 Guide: Off</button>
 
   <!-- ===== MAIN MENU ===== -->
   <div class="screen" id="mainMenu">
@@ -29,7 +30,32 @@
       <button class="menu-btn" id="newGameBtn">New Game</button>
       <button class="menu-btn" id="continueBtn" disabled>Continue</button>
       <button class="menu-btn" id="settingsBtn">Settings</button>
+      <button class="menu-btn" id="howToPlayBtn">How to Play</button>
+      <div class="difficulty-row">
+        <label class="difficulty-label">Difficulty</label>
+        <div class="difficulty-buttons" id="difficultyButtons">
+          <button class="difficulty-btn" data-difficulty="zen">Zen</button>
+          <button class="difficulty-btn" data-difficulty="normal">Normal</button>
+          <button class="difficulty-btn" data-difficulty="hard">Hard</button>
+        </div>
+      </div>
       <div class="menu-sub">calm breathing stabilizes the world</div>
+    </div>
+  </div>
+
+  <!-- ===== ONBOARDING / HOW TO PLAY ===== -->
+  <div class="screen hidden" id="onboardingScreen">
+    <div class="panel onboarding-panel">
+      <h1 class="game-title" style="font-size:16px;">HOW TO PLAY</h1>
+      <div class="onboarding-step">
+        <h3 id="onboardingStepTitle"></h3>
+        <p id="onboardingStepText"></p>
+      </div>
+      <div class="onboarding-dots" id="onboardingDots"></div>
+      <div class="onboarding-nav">
+        <button class="menu-btn back-btn" id="onboardingSkipBtn">Skip</button>
+        <button class="menu-btn" id="onboardingNextBtn">Next</button>
+      </div>
     </div>
   </div>
 
@@ -89,18 +115,27 @@
 
     <div class="lightning-flash" id="lightningFlash"></div>
 
+    <div class="breathing-guide" id="breathingGuide">
+      <div class="breathing-guide-circle" id="breathingGuideCircle"></div>
+      <div class="breathing-guide-label" id="breathingGuideLabel"></div>
+    </div>
+
+    <button class="tap-breathe-btn" id="tapBreatheBtn" style="pointer-events:all;">Tap to Breathe</button>
+
     <div class="zone-banner" id="zoneBanner"></div>
     <div class="input-banner" id="inputBanner"></div>
 
     <div class="win-banner" id="winBanner">
       <h2>WORLD STABILIZED</h2>
       <p id="winBannerText"></p>
+      <div class="session-summary" id="winSummary"></div>
       <button class="menu-btn" id="escToMenuBtn" style="pointer-events:all;">Return to Menu</button>
     </div>
 
     <div class="fail-banner" id="failBanner">
       <h2>FAILED</h2>
       <p id="failBannerText">You failed to meditate properly. Your world collapsed.</p>
+      <div class="session-summary" id="failSummary"></div>
       <button class="menu-btn" id="tryAgainBtn" style="pointer-events:all;">Try Again</button>
       <button class="menu-btn" id="failMainMenuBtn" style="pointer-events:all;">Back to Main Menu</button>
     </div>

@@ -144,22 +144,3 @@ aids for reliably showcasing mechanics on a schedule, not hidden
   to the Brightness/Volume sliders' extreme ends as gracefully as the
   rest of the HUD — a polish pass, not a functional gap.
 
-## Judging-round self-check (DevJams'26, Review 3)
-
-Mapped against the published Review 3 criteria:
-
-- **Near-Completion Progress** — full loop (breathe → stabilize → find
-  treasure → win/fail) is playable end-to-end on both input methods.
-- **Technical Implementation** — modular subsystems (see Architecture
-  above), no external audio/model assets (everything procedurally
-  generated, avoiding licensing questions), defensive error handling
-  around storage and input permissions.
-- **Design Completion** — consistent dark/glow visual language across
-  menu, settings, onboarding, and HUD; keyboard-focus states added for
-  accessibility; mood lighting/water/sky reskin live with world state.
-- **Solution Readiness** — keyboard-only path guarantees a reliable
-  demo even if mic access misbehaves on stage; hidden dev shortcuts
-  (Ctrl+F) let a presenter show off failure/recovery states on demand
-  without waiting on real breathing.
-- **Completeness** — static site, zero build step, deployable to any
-  static host as-is (see "Running it" above).

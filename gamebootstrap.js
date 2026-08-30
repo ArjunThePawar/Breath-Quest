@@ -130,6 +130,27 @@ export async function startGame({ world, hud, onWin }) {
     );
   });
 
+  // Fires once per input source that failed to start (see
+  // GameEngine.start()) - most commonly the microphone, when permission
+  // is denied or no device is available. Rather than the mic silently
+  // doing nothing, tell the player plainly what happened and reassure
+  // them the run is still fully playable on keyboard alone. Persists on
+  // screen since it's an important, lasting change to how they'll play.
+  engine.addEventListener("inputunavailable", (e) => {
+    if (e.detail.name === "mic") {
+      hud.flashInputMessage(
+        "Microphone unavailable (permission denied or no device found) - " +
+          "no problem, press B every few seconds to breathe with the keyboard instead.",
+        { persist: true }
+      );
+    } else {
+      hud.flashInputMessage(
+        `${e.detail.name} input unavailable - the other input method is still active.`,
+        { persist: true }
+      );
+    }
+  });
+
   hud.setInputMode(null);
   hud.flashInputMessage("Setting up microphone and keyboard input…", { persist: true });
 

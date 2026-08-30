@@ -216,7 +216,10 @@ export class GameEngine extends EventTarget {
   // begins the repeating tick loop. If one source fails to start (e.g.
   // the player denies microphone permission), that's caught individually
   // so it doesn't stop the others from starting - the game stays fully
-  // playable on whichever source(s) actually work.
+  // playable on whichever source(s) actually work. Also fires an
+  // "inputunavailable" event per failed source, so a UI can tell the
+  // player exactly what happened instead of them just noticing the mic
+  // silently isn't doing anything.
   async start() {
     this._engineStartTimestamp = performance.now();
 
@@ -227,6 +230,9 @@ export class GameEngine extends EventTarget {
           await input.start(); // "await" matters for mic (asks permission first)
         } catch (err) {
           console.warn(`Breath input "${input.name}" failed to start (that's fine - other input methods are still active):`, err);
+          this.dispatchEvent(
+            new CustomEvent("inputunavailable", { detail: { name: input.name, error: err } })
+          );
         }
       })
     );

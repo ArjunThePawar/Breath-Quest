@@ -123,6 +123,7 @@ export function initApp() {
     camera: world.camera,
     getGroundHeight: world.getGroundHeight,
     getWaterDepth: world.getWaterDepth,
+    getObstacles: world.getObstacles,
     center: world.CENTER,
     controls: settings.controls,
     spawnSplash: world.spawnSplash,

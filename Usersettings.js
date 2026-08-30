@@ -62,7 +62,14 @@ export function loadSettings() {
 }
 
 export function saveSettings(settings) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+  } catch {
+    // Storage unavailable/full/blocked (private browsing, locked-down
+    // machine, etc). Matches loadSettings()'s own guard below - the
+    // session keeps running on in-memory settings, it just won't
+    // persist this change across reloads.
+  }
 }
 
 // Applies the given settings to the live CONFIG object. Call this once

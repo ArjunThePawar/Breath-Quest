@@ -861,6 +861,15 @@ export function initVoxelWorld(canvas) {
     alphaTest: 0.4,
   });
 
+  // ---- collision obstacles (trees & rocks) ----
+  // Flat list of { x, z, radius } circles the player can't walk through
+  // (see getObstacles()/Playermovement.js's resolveCollisions()). Grass
+  // tufts are deliberately excluded - they're walkable set-dressing, not
+  // obstacles. Populated below as each tree/rock is placed, so the
+  // collision shapes always match whatever this session's decoration
+  // pass actually generated (island decoration is randomized per load).
+  const collisionObstacles = [];
+
   heightMap.forEach((info, keyStr) => {
     const [x, z] = keyStr.split(",").map(Number);
     const { h, dist } = info;
@@ -919,6 +928,12 @@ export function initVoxelWorld(canvas) {
       tree.scale.setScalar(scale);
       tree.position.set(x + (hash2(x, z + 9) - 0.5) * 0.4, 0, z + (hash2(x + 9, z) - 0.5) * 0.4);
       decorationGroup.add(tree);
+
+      // Block the trunk/lower-canopy footprint, scaled with the tree's
+      // own random size - a small enough radius that the player can
+      // still brush past the outer leaves, but can't walk straight
+      // through the trunk.
+      collisionObstacles.push({ x: tree.position.x, z: tree.position.z, radius: 0.4 * scale });
     } else if (r > 0.045 && r < 0.075) {
       const clusterCount = 1 + Math.floor(hash2(x + 3, z + 3) * 3);
       for (let i = 0; i < clusterCount; i++) {
@@ -927,10 +942,13 @@ export function initVoxelWorld(canvas) {
         const jitterZ = (hash2(x - i, z + i) - 0.5) * 0.6;
         rock.position.set(x + jitterX, h + 0.2, z + jitterZ);
         rock.rotation.set(hash2(x, i) * Math.PI, hash2(z, i) * Math.PI, 0);
-        rock.scale.setScalar(0.5 + hash2(i, x + z) * 0.6);
+        const rockScale = 0.5 + hash2(i, x + z) * 0.6;
+        rock.scale.setScalar(rockScale);
         rock.castShadow = true;
         rock.receiveShadow = true;
         decorationGroup.add(rock);
+
+        collisionObstacles.push({ x: rock.position.x, z: rock.position.z, radius: 0.32 * rockScale });
       }
     } else if (r > 0.15 && r < 0.4) {
       for (let i = 0; i < 2; i++) {
@@ -1191,10 +1209,19 @@ export function initVoxelWorld(canvas) {
     return Math.max(WATER_LEVEL, Math.round(heightAt(x, z)));
   }
 
+  // Read-only accessor for the collision circles collected during the
+  // decoration pass above. Playermovement.js calls this once (obstacles
+  // never move or change once placed for a session) and resolves the
+  // player's position against them every frame.
+  function getObstacles() {
+    return collisionObstacles;
+  }
+
   return {
     camera,
     getGroundHeight,
     getWaterDepth: (x, z) => waterDepthAt(x, z),
+    getObstacles,
     spawnSplash,
     CENTER,
     setMood,

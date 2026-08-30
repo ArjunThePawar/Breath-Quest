@@ -26,6 +26,7 @@ const WATER_ENTRY_THRESHOLD = 0.15; // depth (world units) before we count the p
 const VERTICAL_EASE_SPEED = 3.5;    // how quickly the camera eases toward its target height (land <-> water)
 const SWIM_BOB_SPEED = 1.6;
 const SWIM_BOB_AMOUNT = 0.07;
+const PLAYER_RADIUS = 0.35; // how close the player's own footprint can get to an obstacle's edge
 
 const _levelEuler = new THREE.Euler(0, 0, 0, "YXZ");
 
@@ -34,6 +35,7 @@ export function initPlayerMovement({
   camera,
   getGroundHeight,
   getWaterDepth,
+  getObstacles,
   center,
   controls,
   onBorderWarning,
@@ -97,6 +99,44 @@ export function initPlayerMovement({
     camera.quaternion.setFromEuler(_levelEuler);
   }
 
+  // Pushes (x, z) back out of any obstacle circle it's currently
+  // overlapping, treating the player as a small circle of its own
+  // (PLAYER_RADIUS) rather than a single point - simple, cheap
+  // circle-vs-circle resolution, good enough for a handful of trees/
+  // rocks near the player at any given time. Returns a NEW {x, z}
+  // rather than mutating in place, so callers stay in control of when
+  // it's applied. Safe to call every frame even with no obstacles at
+  // all (getObstacles is optional - falls back to an empty list).
+  function resolveCollisions(x, z) {
+    const obstacles = getObstacles ? getObstacles() : null;
+    if (!obstacles || obstacles.length === 0) return { x, z };
+
+    let resolvedX = x;
+    let resolvedZ = z;
+
+    for (const obstacle of obstacles) {
+      const dx = resolvedX - obstacle.x;
+      const dz = resolvedZ - obstacle.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      const minDist = obstacle.radius + PLAYER_RADIUS;
+
+      if (dist < minDist) {
+        // Overlapping - push straight back out along the line from the
+        // obstacle's center through the player, by however much they're
+        // overlapping. If the player is standing exactly on the center
+        // (dist === 0, extremely unlikely but possible), push along an
+        // arbitrary fixed direction so this never divides by zero.
+        const pushDist = minDist - dist;
+        const nx = dist > 0.0001 ? dx / dist : 1;
+        const nz = dist > 0.0001 ? dz / dist : 0;
+        resolvedX += nx * pushDist;
+        resolvedZ += nz * pushDist;
+      }
+    }
+
+    return { x: resolvedX, z: resolvedZ };
+  }
+
   function spawn() {
     const gx = center + ACCESS_RADIUS * 0.4;
     const gz = center + ACCESS_RADIUS * 0.4;
@@ -155,6 +195,13 @@ export function initPlayerMovement({
       move.normalize().multiplyScalar(speed * dt);
       camera.position.x += move.x;
       camera.position.z += move.z;
+
+      // Resolve against trees/rocks right after moving, so the player
+      // can slide along an obstacle's edge instead of clipping through
+      // it or getting stuck dead on contact.
+      const resolved = resolveCollisions(camera.position.x, camera.position.z);
+      camera.position.x = resolved.x;
+      camera.position.z = resolved.z;
     }
 
     if (inWater) {

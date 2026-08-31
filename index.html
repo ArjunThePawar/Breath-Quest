@@ -1,15 +1,169 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>Breath Quest — Mechanism Test</title>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Breath Quest</title>
+<link rel="stylesheet" href="./style.css" />
+
+<!-- Resolves the bare "three" import used inside voxelWorld.js -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
 </head>
 <body>
-  <!-- No visual game UI here yet - this page exists purely to load and
-       run the JavaScript mechanism, with output visible in the console. -->
-  <p>Open DevTools console. Breathe normally into your mic (or, in keyboard mode, press B roughly every 4 seconds to simulate calm breathing — tap faster for panicked).</p>
 
-  <!-- type="module" is required because our JS files use import/export -->
-  <script type="module" src="./main.js"></script>
+  <canvas id="worldCanvas"></canvas>
+
+  <button id="musicToggleBtn" class="music-toggle" title="Toggle background music">🔇 Music: Off</button>
+  <button id="breathingGuideToggleBtn" class="breathing-guide-toggle" title="Toggle visual breathing pacer">🫁 Guide: Off</button>
+
+  <!-- ===== MAIN MENU ===== -->
+  <div class="screen" id="mainMenu">
+    <div class="panel">
+      <h1 class="game-title">BREATH QUEST</h1>
+      <button class="menu-btn" id="newGameBtn">New Game</button>
+      <button class="menu-btn" id="continueBtn" disabled>Continue</button>
+      <button class="menu-btn" id="settingsBtn">Settings</button>
+      <button class="menu-btn" id="howToPlayBtn">How to Play</button>
+      <div class="difficulty-row">
+        <label class="difficulty-label">Difficulty</label>
+        <div class="difficulty-buttons" id="difficultyButtons">
+          <button class="difficulty-btn" data-difficulty="zen">Zen</button>
+          <button class="difficulty-btn" data-difficulty="normal">Normal</button>
+          <button class="difficulty-btn" data-difficulty="hard">Hard</button>
+        </div>
+      </div>
+      <div class="menu-sub">calm breathing stabilizes the world</div>
+    </div>
+  </div>
+
+  <!-- ===== ONBOARDING / HOW TO PLAY ===== -->
+  <div class="screen hidden" id="onboardingScreen">
+    <div class="panel onboarding-panel">
+      <h1 class="game-title" style="font-size:16px;">HOW TO PLAY</h1>
+      <div class="onboarding-step">
+        <h3 id="onboardingStepTitle"></h3>
+        <p id="onboardingStepText"></p>
+      </div>
+      <div class="onboarding-dots" id="onboardingDots"></div>
+      <div class="onboarding-nav">
+        <button class="menu-btn back-btn" id="onboardingSkipBtn">Skip</button>
+        <button class="menu-btn" id="onboardingNextBtn">Next</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== SETTINGS MENU ===== -->
+  <div class="screen hidden" id="settingsMenu">
+    <div class="panel settings-panel">
+      <h1 class="game-title" style="font-size:16px;">SETTINGS</h1>
+
+      <div class="settings-row">
+        <label>Volume <span class="settings-value" id="volumeVal">50</span></label>
+        <input type="range" id="volumeSlider" min="0" max="100" value="50" />
+      </div>
+
+      <div class="settings-row">
+        <label>Brightness <span class="settings-value" id="brightnessVal">50</span></label>
+        <input type="range" id="brightnessSlider" min="0" max="100" value="50" />
+      </div>
+
+      <div class="settings-row">
+        <label>Mic Sensitivity <span class="settings-value" id="sensitivityVal">50</span></label>
+        <input type="range" id="sensitivitySlider" min="0" max="100" value="50" />
+      </div>
+
+      <div class="settings-row">
+        <label>Controls</label>
+        <div class="controls-grid" id="controlsGrid"></div>
+        <div class="menu-sub" style="text-align:left; margin-top:4px;">
+          Movement, jump, and crouch are live in-game - rebind here any time your session isn't running.
+        </div>
+      </div>
+
+      <button class="menu-btn back-btn" id="backFromSettingsBtn">Back</button>
+    </div>
+  </div>
+
+  <!-- ===== IN-GAME HUD ===== -->
+  <div id="hud">
+    <div class="hud-topbar">
+      <div class="stat-block">
+        <div class="stat-label">World Stability</div>
+        <div class="stat-value"><span id="stabilityValue">60</span>%</div>
+        <div class="bar-track"><div class="bar-fill" id="stabilityFill" style="width:60%"></div></div>
+      </div>
+      <div class="stat-block">
+        <div class="stat-label">Power</div>
+        <div class="stat-value"><span id="powerValue">10</span></div>
+        <div class="bar-track"><div class="bar-fill" id="powerFill" style="width:10%"></div></div>
+      </div>
+      <div class="stat-block">
+        <div class="stat-label">Breath State</div>
+        <div class="stat-value" id="breathStateValue">moderate</div>
+        <div class="stat-label" style="margin-top:6px;">Input: <span id="inputModeValue">—</span></div>
+      </div>
+      <div class="stat-block">
+        <div class="stat-label">💎 Hidden Gems</div>
+        <div class="stat-value"><span id="gemsFoundValue">0</span>/<span id="gemsTotalValue">0</span></div>
+        <div class="menu-sub" style="text-align:left; margin-top:4px; font-size:10px;">wander the island to find them</div>
+      </div>
+      <div class="border-warning" id="borderWarning"></div>
+      <div class="water-overlay" id="waterOverlay"></div>
+    </div>
+
+    <div class="lightning-flash" id="lightningFlash"></div>
+
+    <div class="breathing-guide" id="breathingGuide">
+      <div class="breathing-guide-circle" id="breathingGuideCircle"></div>
+      <div class="breathing-guide-label" id="breathingGuideLabel"></div>
+    </div>
+
+    <button class="tap-breathe-btn" id="tapBreatheBtn" style="pointer-events:all;">Tap to Breathe</button>
+    <!-- Force-chaotic is intentionally NOT a visible button - it's a
+         hidden dev/panic shortcut triggered by pressing Ctrl+F (see
+         menuController.js). No DOM element for it at all, so there's
+         nothing on screen to hide/reveal and nothing that could
+         accidentally be clicked. -->
+
+
+    <div class="zone-banner" id="zoneBanner"></div>
+    <div class="input-banner" id="inputBanner"></div>
+
+    <div class="win-banner" id="winBanner">
+      <h2>WORLD STABILIZED</h2>
+      <p id="winBannerText"></p>
+      <div class="session-summary" id="winSummary"></div>
+      <button class="menu-btn" id="escToMenuBtn" style="pointer-events:all;">Return to Menu</button>
+    </div>
+
+    <div class="fail-banner" id="failBanner">
+      <h2>FAILED</h2>
+      <p id="failBannerText">You failed to meditate properly. Your world collapsed.</p>
+      <div class="session-summary" id="failSummary"></div>
+      <button class="menu-btn" id="tryAgainBtn" style="pointer-events:all;">Try Again</button>
+      <button class="menu-btn" id="failMainMenuBtn" style="pointer-events:all;">Back to Main Menu</button>
+    </div>
+
+    <div class="pause-banner" id="pauseBanner">
+      <h2>PAUSED</h2>
+      <button class="menu-btn" id="pauseContinueBtn" style="pointer-events:all;">Continue</button>
+      <button class="menu-btn" id="pauseRestartBtn" style="pointer-events:all;">Restart</button>
+      <button class="menu-btn" id="pauseMainMenuBtn" style="pointer-events:all;">Back to Main Menu</button>
+    </div>
+
+    <div class="esc-hint">click to look around · WASD to move · Esc to pause · breathe calmly and steadily</div>
+  </div>
+
+  <script type="module">
+    import { initApp } from "./menuController.js";
+    initApp();
+  </script>
 </body>
 </html>
